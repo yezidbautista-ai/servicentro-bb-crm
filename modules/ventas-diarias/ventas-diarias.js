@@ -223,11 +223,11 @@ function renderFormularioIngresos() {
 
   let botones = '';
   if (!v) {
-    botones = `<button type="submit" class="btn btn-primario">Guardar ingresos</button>`;
+    botones = `<button type="submit" form="form-ingresos" class="btn btn-primario">Guardar ingresos</button>`;
   } else if (!enviado) {
     botones = estado.modoEdicionIngresos
       ? `
-        <button type="submit" class="btn btn-primario">Guardar cambios</button>
+        <button type="submit" form="form-ingresos" class="btn btn-primario">Guardar cambios</button>
         <button type="button" id="btn-cancelar-ingresos" class="btn btn-secundario">Cancelar</button>
       `
       : `<button type="button" id="btn-editar-ingresos" class="btn-editar">Editar ingresos</button>`;
@@ -240,7 +240,7 @@ function renderFormularioIngresos() {
         ${camposIngreso}
         ${campoDineroBase}
       </form>
-      <div class="acciones-tarjeta">${botones}</div>
+      <div class="acciones-tarjeta" id="acciones-ingresos">${botones}</div>
     </section>
   `;
 }
