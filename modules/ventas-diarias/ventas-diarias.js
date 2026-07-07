@@ -2,14 +2,16 @@
 //
 // Módulo 1 — Ventas Diarias (registro de caja).
 //
-// Tarjetas, en orden: Ingresos del día → Salidas del día → Pagos Diarios
-// (visible para ambos roles, solo lectura) → Totales del día (recibo) →
-// Enviar/Exportar.
+// Layout: Ingresos (izquierda) y Salidas (derecha) en tablas gemelas, cada
+// una con su propio total — Ingresos en azul, Salidas en rojo — y esos
+// mismos colores se repiten en el Cierre de Caja para que se identifique de
+// dónde viene cada cifra. Debajo va el Cierre de Caja grande (protagonista
+// visual) y luego Pagos Diarios.
 //
-// Flujo de edición: al guardar ingresos por primera vez, los campos quedan
-// bloqueados (solo lectura) y aparece un botón "Editar". Al enviar el día
-// (con confirmación), TODO queda bloqueado permanentemente — reforzado con
-// triggers en la base de datos (sql/007), no solo en el frontend.
+// Flujo de edición: al guardar por primera vez, cada tarjeta queda bloqueada
+// (solo lectura) con un único botón "Editar ingresos" / "Editar salidas".
+// Al enviar el día (con confirmación), TODO queda bloqueado permanentemente
+// — reforzado con triggers en la base de datos (sql/007), no solo frontend.
 //
 // Nota de seguridad de datos: la tarjeta "Pagos Diarios" muestra pagos a
 // proveedores (información financiera). A petición explícita, Fabian
@@ -30,11 +32,11 @@ import { hoyISO } from '../../core/helpers/dates.js';
 import { mostrarToast, mostrarConfirmacion } from '../../core/ui.js';
 
 const METODOS_INGRESO = [
-  { campo: 'ventas_efectivo', label: 'Ventas en efectivo' },
-  { campo: 'ventas_datafono', label: 'Ventas Datáfono' },
-  { campo: 'ventas_nequi', label: 'Ventas Nequi' },
-  { campo: 'ventas_daviplata', label: 'Ventas Daviplata' },
-  { campo: 'ventas_transferencia', label: 'Ventas transferencia Bancolombia' },
+  { campo: 'ventas_efectivo', label: 'Efectivo' },
+  { campo: 'ventas_datafono', label: 'Datáfono' },
+  { campo: 'ventas_nequi', label: 'Nequi' },
+  { campo: 'ventas_daviplata', label: 'Daviplata' },
+  { campo: 'ventas_transferencia', label: 'Transferencia Bancolombia' },
 ];
 
 const METODOS_SALIDA = [
@@ -61,7 +63,7 @@ const estado = {
   salidas: [],
   pagosDiarios: [],
   modoEdicionIngresos: false,
-  filaEditandoSalida: null,
+  modoEdicionSalidas: false,
 };
 
 function esAdmin() {
@@ -76,7 +78,7 @@ async function render(container) {
   estado.fecha = hoyISO();
   estado.esCargaManual = false;
   estado.modoEdicionIngresos = false;
-  estado.filaEditandoSalida = null;
+  estado.modoEdicionSalidas = false;
 
   container.innerHTML = `
     <h2>Ventas Diarias</h2>
@@ -90,6 +92,7 @@ async function render(container) {
       estado.fecha = e.target.value;
       estado.esCargaManual = false;
       estado.modoEdicionIngresos = false;
+      estado.modoEdicionSalidas = false;
       const selectorMes = container.querySelector('#selector-mes-manual');
       if (selectorMes) selectorMes.value = '';
       cargarYRenderizar(container);
@@ -101,6 +104,7 @@ async function render(container) {
       estado.fecha = e.target.value;
       estado.esCargaManual = true;
       estado.modoEdicionIngresos = false;
+      estado.modoEdicionSalidas = false;
       inputFecha.value = '';
       cargarYRenderizar(container);
     });
@@ -198,17 +202,14 @@ function renderEtiquetaEnviado(v) {
   return `<div class="etiqueta-enviado">✔ Enviado${fechaEnvio ? ' el ' + fechaEnvio : ''} — valores bloqueados</div>`;
 }
 
-function crearCampoMoneda(campo, label, valor, disabledAttr) {
+function crearCeldaMoneda(campo, valor, disabledAttr) {
   const valorFormateado = valor ? formatearMientrasEscribe(String(valor)) : '';
   return `
-    <label>
-      ${label}
-      <div class="input-moneda">
-        <span class="prefijo">$</span>
-        <input type="text" inputmode="numeric" placeholder="0" data-campo="${campo}"
-          value="${valorFormateado}" ${disabledAttr} />
-      </div>
-    </label>
+    <div class="input-moneda">
+      <span class="prefijo">$</span>
+      <input type="text" inputmode="numeric" placeholder="0" data-campo="${campo}"
+        value="${valorFormateado}" ${disabledAttr} />
+    </div>
   `;
 }
 
@@ -218,10 +219,22 @@ function renderFormularioIngresos() {
   const editable = !v || estado.modoEdicionIngresos;
   const disabledAttr = editable ? '' : 'disabled';
 
-  const camposIngreso = METODOS_INGRESO.map((m) =>
-    crearCampoMoneda(m.campo, m.label, v?.[m.campo], disabledAttr)
+  const totalIngresos = v ? METODOS_INGRESO.reduce((acc, m) => acc + Number(v[m.campo] || 0), 0) : 0;
+
+  const filas = METODOS_INGRESO.map(
+    (m) => `
+    <tr>
+      <td>${m.label}</td>
+      <td>${crearCeldaMoneda(m.campo, v?.[m.campo], disabledAttr)}</td>
+    </tr>`
   ).join('');
-  const campoDineroBase = crearCampoMoneda('dinero_base', 'Dinero Base (para vueltas)', v?.dinero_base, disabledAttr);
+
+  const filaDineroBase = `
+    <tr class="fila-secundaria">
+      <td>Dinero base (para vueltas)</td>
+      <td>${crearCeldaMoneda('dinero_base', v?.dinero_base, disabledAttr)}</td>
+    </tr>
+  `;
 
   let botones = '';
   if (!v) {
@@ -238,11 +251,20 @@ function renderFormularioIngresos() {
   return `
     <section class="tarjeta">
       <h3>Ingresos del día${estado.esCargaManual ? ' (carga manual)' : ''}</h3>
-      <form id="form-ingresos" class="form-grid">
-        ${camposIngreso}
-        ${campoDineroBase}
+      <form id="form-ingresos">
+        <table class="tabla-simple tabla-ingresos-salidas">
+          <thead><tr><th>Descripción</th><th>Valor</th></tr></thead>
+          <tbody>
+            ${filas}
+            ${filaDineroBase}
+            <tr class="fila-total">
+              <td>Total Ingresos</td>
+              <td class="monto total-ingresos">${formatCOP(totalIngresos)}</td>
+            </tr>
+          </tbody>
+        </table>
       </form>
-      <div class="acciones-tarjeta" id="acciones-ingresos">${botones}</div>
+      <div class="acciones-tarjeta">${botones}</div>
     </section>
   `;
 }
@@ -250,28 +272,49 @@ function renderFormularioIngresos() {
 function renderSalidas() {
   const v = estado.ventaDiaria;
   const bloqueado = v.enviado;
+  const editable = !bloqueado && estado.modoEdicionSalidas;
+  const totalSalidas = estado.salidas.reduce((acc, s) => acc + Number(s.valor || 0), 0);
+  const colspanVacio = editable ? 4 : 3;
+
+  let botones = '';
+  if (!bloqueado) {
+    botones = editable
+      ? `
+        <button type="button" id="btn-guardar-salidas" class="btn btn-primario">Guardar cambios</button>
+        <button type="button" id="btn-cancelar-salidas" class="btn btn-secundario">Cancelar</button>
+      `
+      : `<button type="button" id="btn-editar-salidas" class="btn-editar">Editar salidas</button>`;
+  }
+
   return `
     <section class="tarjeta">
       <h3>Salidas del día</h3>
-      <table class="tabla-simple">
+      <table class="tabla-simple tabla-ingresos-salidas">
         <thead>
-          <tr><th>Descripción</th><th>Valor</th><th>Método</th>${bloqueado ? '' : '<th></th>'}</tr>
+          <tr><th>Descripción</th><th>Valor</th><th>Método</th>${editable ? '<th></th>' : ''}</tr>
         </thead>
         <tbody>
           ${
             estado.salidas.length
-              ? estado.salidas.map((s) => renderFilaSalida(s, bloqueado)).join('')
-              : `<tr><td colspan="4" class="mensaje-vacio">Sin salidas registradas.</td></tr>`
+              ? estado.salidas.map((s) => renderFilaSalida(s, editable)).join('')
+              : `<tr><td colspan="${colspanVacio}" class="mensaje-vacio">Sin salidas registradas.</td></tr>`
           }
+          <tr class="fila-total">
+            <td>Total Salidas</td>
+            <td class="monto total-salidas">${formatCOP(totalSalidas)}</td>
+            <td></td>
+            ${editable ? '<td></td>' : ''}
+          </tr>
         </tbody>
       </table>
-      ${bloqueado ? '' : renderFormularioNuevaSalida()}
+      ${editable ? renderFormularioNuevaSalida() : ''}
+      <div class="acciones-tarjeta">${botones}</div>
     </section>
   `;
 }
 
-function renderFilaSalida(s, bloqueado) {
-  if (!bloqueado && estado.filaEditandoSalida === s.id) {
+function renderFilaSalida(s, editable) {
+  if (editable) {
     return `
       <tr data-id="${s.id}">
         <td><input type="text" class="edit-descripcion" value="${s.descripcion}" /></td>
@@ -288,10 +331,7 @@ function renderFilaSalida(s, bloqueado) {
             ).join('')}
           </select>
         </td>
-        <td>
-          <button type="button" class="btn-editar-salida" data-accion="guardar" data-id="${s.id}">Guardar</button>
-          <button type="button" class="btn-eliminar-salida" data-accion="cancelar" data-id="${s.id}">Cancelar</button>
-        </td>
+        <td><button type="button" class="btn-eliminar-salida" data-id="${s.id}">Eliminar</button></td>
       </tr>
     `;
   }
@@ -301,14 +341,6 @@ function renderFilaSalida(s, bloqueado) {
       <td>${s.descripcion}</td>
       <td class="monto">${formatCOP(s.valor)}</td>
       <td>${etiquetaMetodo(s.metodo_pago)}</td>
-      ${
-        bloqueado
-          ? ''
-          : `<td>
-              <button type="button" class="btn-editar-salida" data-accion="editar" data-id="${s.id}">Editar</button>
-              <button type="button" class="btn-eliminar-salida" data-accion="eliminar" data-id="${s.id}">Eliminar</button>
-            </td>`
-      }
     </tr>
   `;
 }
@@ -378,17 +410,18 @@ function renderTotales() {
   return `
     <div class="recibo recibo-cierre">
       <div class="recibo-header">Cierre de Caja — Local Comercial · ${v.fecha}</div>
-      <div class="recibo-linea"><span>Dinero base (para vueltas)</span><span class="monto">${formatCOP(v.dinero_base)}</span></div>
+      <div class="recibo-leyenda"><span class="monto-ingreso">●</span> Viene de Ingresos &nbsp;&nbsp; <span class="monto-salida">●</span> Viene de Salidas</div>
+      <div class="recibo-linea"><span>Dinero base (para vueltas)</span><span class="monto monto-ingreso">${formatCOP(v.dinero_base)}</span></div>
       <div class="recibo-divisor"></div>
-      <div class="recibo-linea"><span>Total en efectivo (ventas)</span><span class="monto">${formatCOP(v.ventas_efectivo)}</span></div>
-      <div class="recibo-linea"><span>Salidas en efectivo</span><span class="monto">− ${formatCOP(v.salidas_efectivo)}</span></div>
+      <div class="recibo-linea"><span>Total en efectivo (ventas)</span><span class="monto monto-ingreso">${formatCOP(v.ventas_efectivo)}</span></div>
+      <div class="recibo-linea"><span>Salidas en efectivo</span><span class="monto monto-salida">− ${formatCOP(v.salidas_efectivo)}</span></div>
       <div class="recibo-linea recibo-total"><span>Efectivo neto en caja</span><span class="monto">${formatCOP(v.efectivo_neto)}</span></div>
       <div class="recibo-divisor"></div>
-      <div class="recibo-linea"><span>Total dinero digital (bruto)</span><span class="monto">${formatCOP(totalDigitalBruto)}</span></div>
-      <div class="recibo-linea"><span>Salidas por medios digitales</span><span class="monto">− ${formatCOP(v.salidas_digital)}</span></div>
+      <div class="recibo-linea"><span>Total dinero digital (bruto)</span><span class="monto monto-ingreso">${formatCOP(totalDigitalBruto)}</span></div>
+      <div class="recibo-linea"><span>Salidas por medios digitales</span><span class="monto monto-salida">− ${formatCOP(v.salidas_digital)}</span></div>
       <div class="recibo-linea recibo-total"><span>Digital neto</span><span class="monto">${formatCOP(v.digital_neto)}</span></div>
       <div class="recibo-divisor"></div>
-      <div class="recibo-linea recibo-total"><span>Total venta diaria (bruto)</span><span class="monto">${formatCOP(v.total_venta_diaria)}</span></div>
+      <div class="recibo-linea recibo-total"><span>Total venta diaria (bruto)</span><span class="monto monto-ingreso">${formatCOP(v.total_venta_diaria)}</span></div>
     </div>
   `;
 }
@@ -414,20 +447,20 @@ function enlazarEventos(container) {
       e.preventDefault();
       await guardarIngresos(container, formIngresos);
     });
-    const btnEditar = container.querySelector('#btn-editar-ingresos');
-    if (btnEditar) {
-      btnEditar.addEventListener('click', () => {
-        estado.modoEdicionIngresos = true;
-        pintarContenido(container);
-      });
-    }
-    const btnCancelar = container.querySelector('#btn-cancelar-ingresos');
-    if (btnCancelar) {
-      btnCancelar.addEventListener('click', () => {
-        estado.modoEdicionIngresos = false;
-        pintarContenido(container);
-      });
-    }
+  }
+  const btnEditarIngresos = container.querySelector('#btn-editar-ingresos');
+  if (btnEditarIngresos) {
+    btnEditarIngresos.addEventListener('click', () => {
+      estado.modoEdicionIngresos = true;
+      pintarContenido(container);
+    });
+  }
+  const btnCancelarIngresos = container.querySelector('#btn-cancelar-ingresos');
+  if (btnCancelarIngresos) {
+    btnCancelarIngresos.addEventListener('click', () => {
+      estado.modoEdicionIngresos = false;
+      pintarContenido(container);
+    });
   }
 
   const formSalida = container.querySelector('#form-salida');
@@ -438,28 +471,29 @@ function enlazarEventos(container) {
     });
   }
 
-  container.querySelectorAll('.btn-editar-salida').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const { id, accion } = btn.dataset;
-      if (accion === 'editar') {
-        estado.filaEditandoSalida = id;
-        pintarContenido(container);
-      } else if (accion === 'guardar') {
-        await guardarEdicionSalida(container, id);
-      }
+  const btnEditarSalidas = container.querySelector('#btn-editar-salidas');
+  if (btnEditarSalidas) {
+    btnEditarSalidas.addEventListener('click', () => {
+      estado.modoEdicionSalidas = true;
+      pintarContenido(container);
     });
-  });
+  }
+  const btnCancelarSalidas = container.querySelector('#btn-cancelar-salidas');
+  if (btnCancelarSalidas) {
+    btnCancelarSalidas.addEventListener('click', () => {
+      estado.modoEdicionSalidas = false;
+      pintarContenido(container);
+    });
+  }
+  const btnGuardarSalidas = container.querySelector('#btn-guardar-salidas');
+  if (btnGuardarSalidas) {
+    btnGuardarSalidas.addEventListener('click', () => guardarTodasLasSalidas(container));
+  }
 
   container.querySelectorAll('.btn-eliminar-salida').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      const { id, accion } = btn.dataset;
-      if (accion === 'cancelar') {
-        estado.filaEditandoSalida = null;
-        pintarContenido(container);
-      } else if (accion === 'eliminar') {
-        if (!confirm('¿Eliminar esta salida?')) return;
-        await eliminarSalida(container, id);
-      }
+      if (!confirm('¿Eliminar esta salida?')) return;
+      await eliminarSalida(container, btn.dataset.id);
     });
   });
 
@@ -537,30 +571,37 @@ async function agregarSalida(container, form) {
   }
 
   mostrarToast('Salida agregada.', 'exito');
+  estado.modoEdicionSalidas = true; // se queda en modo edición para seguir agregando/ajustando
   await cargarYRenderizar(container);
 }
 
-async function guardarEdicionSalida(container, id) {
-  const fila = container.querySelector(`tr[data-id="${id}"]`);
-  const descripcion = fila.querySelector('.edit-descripcion').value.trim();
-  const valor = parseCOP(fila.querySelector('.edit-valor').value);
-  const metodo_pago = fila.querySelector('.edit-metodo').value;
+async function guardarTodasLasSalidas(container) {
+  const filas = Array.from(container.querySelectorAll('tr[data-id]')).filter((tr) =>
+    tr.querySelector('.edit-descripcion')
+  );
 
-  if (!descripcion || valor <= 0) {
-    mostrarToast('Descripción y valor son obligatorios.', 'error');
-    return;
+  for (const fila of filas) {
+    const id = fila.dataset.id;
+    const descripcion = fila.querySelector('.edit-descripcion').value.trim();
+    const valor = parseCOP(fila.querySelector('.edit-valor').value);
+    const metodo_pago = fila.querySelector('.edit-metodo').value;
+
+    if (!descripcion || valor <= 0) {
+      mostrarToast('Todas las salidas necesitan descripción y valor válidos.', 'error');
+      return;
+    }
+
+    const { error } = await supabase.from('salidas_diarias').update({ descripcion, valor, metodo_pago }).eq('id', id);
+
+    if (error) {
+      console.error('Error actualizando salida', id, error);
+      mostrarToast(`No se pudo guardar una salida: ${error.message}`, 'error');
+      return;
+    }
   }
 
-  const { error } = await supabase.from('salidas_diarias').update({ descripcion, valor, metodo_pago }).eq('id', id);
-
-  if (error) {
-    console.error('Error editando salida:', error);
-    mostrarToast(`No se pudo guardar: ${error.message}`, 'error');
-    return;
-  }
-
-  estado.filaEditandoSalida = null;
-  mostrarToast('Salida actualizada.', 'exito');
+  estado.modoEdicionSalidas = false;
+  mostrarToast('Salidas actualizadas.', 'exito');
   await cargarYRenderizar(container);
 }
 
@@ -619,46 +660,52 @@ async function exportarPDF() {
 
     doc.text('INGRESOS', 10, y);
     y += 6;
+    let totalIngresos = 0;
     METODOS_INGRESO.forEach((m) => {
       doc.text(`${m.label}: ${formatCOP(v[m.campo])}`, 12, y);
+      totalIngresos += Number(v[m.campo] || 0);
       y += 6;
     });
     doc.text(`Dinero base: ${formatCOP(v.dinero_base)}`, 12, y);
+    y += 6;
+    doc.text(`Total Ingresos: ${formatCOP(totalIngresos)}`, 12, y);
     y += 10;
 
     doc.text('SALIDAS', 10, y);
     y += 6;
+    let totalSalidas = 0;
     if (estado.salidas.length === 0) {
       doc.text('Sin salidas registradas.', 12, y);
       y += 6;
     } else {
       estado.salidas.forEach((s) => {
         doc.text(`${s.descripcion} - ${formatCOP(s.valor)} - ${etiquetaMetodo(s.metodo_pago)}`, 12, y);
+        totalSalidas += Number(s.valor || 0);
+        y += 6;
+      });
+      doc.text(`Total Salidas: ${formatCOP(totalSalidas)}`, 12, y);
+      y += 6;
+    }
+    y += 4;
+
+    doc.text('PAGOS DIARIOS A PROVEEDORES', 10, y);
+    y += 6;
+    if (estado.pagosDiarios.length === 0) {
+      doc.text('Sin pagos registrados hoy.', 12, y);
+      y += 6;
+    } else {
+      estado.pagosDiarios.forEach((p) => {
+        doc.text(
+          `${p.proveedores?.nombre || '-'} - ${formatCOP(p.valor_pagado || p.valor)} - ${p.metodo_pago ? etiquetaMetodo(p.metodo_pago) : '-'}`,
+          12,
+          y
+        );
         y += 6;
       });
     }
     y += 4;
 
-    {
-      doc.text('PAGOS DIARIOS A PROVEEDORES', 10, y);
-      y += 6;
-      if (estado.pagosDiarios.length === 0) {
-        doc.text('Sin pagos registrados hoy.', 12, y);
-        y += 6;
-      } else {
-        estado.pagosDiarios.forEach((p) => {
-          doc.text(
-            `${p.proveedores?.nombre || '-'} - ${formatCOP(p.valor_pagado || p.valor)} - ${p.metodo_pago ? etiquetaMetodo(p.metodo_pago) : '-'}`,
-            12,
-            y
-          );
-          y += 6;
-        });
-      }
-      y += 4;
-    }
-
-    doc.text('TOTALES', 10, y);
+    doc.text('CIERRE DE CAJA', 10, y);
     y += 6;
     doc.text(`Efectivo neto en caja: ${formatCOP(v.efectivo_neto)}`, 12, y);
     y += 6;
@@ -677,23 +724,23 @@ async function exportarExcel() {
   try {
     const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
     const v = estado.ventaDiaria;
+    const totalIngresos = METODOS_INGRESO.reduce((acc, m) => acc + Number(v[m.campo] || 0), 0);
+    const totalSalidas = estado.salidas.reduce((acc, s) => acc + Number(s.valor || 0), 0);
 
     const hojaIngresos = XLSX.utils.json_to_sheet([
-      { concepto: 'Ventas en efectivo', valor: v.ventas_efectivo },
-      { concepto: 'Ventas Datáfono', valor: v.ventas_datafono },
-      { concepto: 'Ventas Nequi', valor: v.ventas_nequi },
-      { concepto: 'Ventas Daviplata', valor: v.ventas_daviplata },
-      { concepto: 'Ventas transferencia', valor: v.ventas_transferencia },
+      ...METODOS_INGRESO.map((m) => ({ concepto: m.label, valor: v[m.campo] })),
       { concepto: 'Dinero base', valor: v.dinero_base },
+      { concepto: 'Total Ingresos', valor: totalIngresos },
     ]);
 
-    const hojaSalidas = XLSX.utils.json_to_sheet(
-      estado.salidas.map((s) => ({
+    const hojaSalidas = XLSX.utils.json_to_sheet([
+      ...estado.salidas.map((s) => ({
         descripcion: s.descripcion,
         valor: s.valor,
         metodo_pago: etiquetaMetodo(s.metodo_pago),
-      }))
-    );
+      })),
+      { descripcion: 'Total Salidas', valor: totalSalidas, metodo_pago: '' },
+    ]);
 
     const hojaTotales = XLSX.utils.json_to_sheet([
       { concepto: 'Efectivo neto en caja', valor: v.efectivo_neto },
@@ -705,18 +752,16 @@ async function exportarExcel() {
     XLSX.utils.book_append_sheet(libro, hojaIngresos, 'Ingresos');
     XLSX.utils.book_append_sheet(libro, hojaSalidas, 'Salidas');
 
-    {
-      const hojaPagos = XLSX.utils.json_to_sheet(
-        estado.pagosDiarios.map((p) => ({
-          proveedor: p.proveedores?.nombre || '',
-          valor_pagado: p.valor_pagado || p.valor,
-          metodo_pago: p.metodo_pago ? etiquetaMetodo(p.metodo_pago) : '',
-        }))
-      );
-      XLSX.utils.book_append_sheet(libro, hojaPagos, 'Pagos Diarios');
-    }
+    const hojaPagos = XLSX.utils.json_to_sheet(
+      estado.pagosDiarios.map((p) => ({
+        proveedor: p.proveedores?.nombre || '',
+        valor_pagado: p.valor_pagado || p.valor,
+        metodo_pago: p.metodo_pago ? etiquetaMetodo(p.metodo_pago) : '',
+      }))
+    );
+    XLSX.utils.book_append_sheet(libro, hojaPagos, 'Pagos Diarios');
 
-    XLSX.utils.book_append_sheet(libro, hojaTotales, 'Totales');
+    XLSX.utils.book_append_sheet(libro, hojaTotales, 'Cierre de Caja');
     XLSX.writeFile(libro, `ventas-diarias-${v.fecha}.xlsx`);
   } catch (err) {
     console.error('Error exportando Excel:', err);
