@@ -181,19 +181,20 @@ function renderFormularioIngresos() {
 
 function renderTotales() {
   const v = estado.ventaDiaria;
+  const totalDigitalBruto = v.ventas_datafono + v.ventas_nequi + v.ventas_daviplata + v.ventas_transferencia;
   return `
-    <section class="tarjeta">
-      <h3>Totales (calculados)</h3>
-      <ul class="lista-totales">
-        <li>Total en efectivo: <strong>${formatCOP(v.ventas_efectivo)}</strong></li>
-        <li>Salidas en efectivo: <strong>${formatCOP(v.salidas_efectivo)}</strong></li>
-        <li>Efectivo neto en caja: <strong>${formatCOP(v.efectivo_neto)}</strong></li>
-        <li>Total dinero digital (bruto): <strong>${formatCOP(v.ventas_datafono + v.ventas_nequi + v.ventas_daviplata + v.ventas_transferencia)}</strong></li>
-        <li>Salidas por medios digitales: <strong>${formatCOP(v.salidas_digital)}</strong></li>
-        <li>Digital neto: <strong>${formatCOP(v.digital_neto)}</strong></li>
-        <li>Total venta diaria (bruto): <strong>${formatCOP(v.total_venta_diaria)}</strong></li>
-      </ul>
-    </section>
+    <div class="recibo">
+      <div class="recibo-header">Totales del día — ${v.fecha}</div>
+      <div class="recibo-linea"><span>Total en efectivo</span><span class="monto">${formatCOP(v.ventas_efectivo)}</span></div>
+      <div class="recibo-linea"><span>Salidas en efectivo</span><span class="monto">− ${formatCOP(v.salidas_efectivo)}</span></div>
+      <div class="recibo-linea recibo-total"><span>Efectivo neto en caja</span><span class="monto">${formatCOP(v.efectivo_neto)}</span></div>
+      <div class="recibo-divisor"></div>
+      <div class="recibo-linea"><span>Total dinero digital (bruto)</span><span class="monto">${formatCOP(totalDigitalBruto)}</span></div>
+      <div class="recibo-linea"><span>Salidas por medios digitales</span><span class="monto">− ${formatCOP(v.salidas_digital)}</span></div>
+      <div class="recibo-linea recibo-total"><span>Digital neto</span><span class="monto">${formatCOP(v.digital_neto)}</span></div>
+      <div class="recibo-divisor"></div>
+      <div class="recibo-linea recibo-total"><span>Total venta diaria (bruto)</span><span class="monto">${formatCOP(v.total_venta_diaria)}</span></div>
+    </div>
   `;
 }
 
@@ -213,7 +214,7 @@ function renderSalidas() {
                     (s) => `
             <tr data-id="${s.id}">
               <td>${s.descripcion}</td>
-              <td>${formatCOP(s.valor)}</td>
+              <td class="monto">${formatCOP(s.valor)}</td>
               <td>${etiquetaMetodo(s.metodo_pago)}</td>
               <td><button type="button" class="btn-eliminar-salida" data-id="${s.id}">Eliminar</button></td>
             </tr>`
