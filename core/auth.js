@@ -20,7 +20,7 @@ export function getPerfilActual() {
 export async function iniciarSesionGoogle() {
   const { error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: window.location.origin },
+    options: { redirectTo: window.location.origin + window.location.pathname },
   });
   if (error) {
     console.error('Error al iniciar sesión con Google:', error);
