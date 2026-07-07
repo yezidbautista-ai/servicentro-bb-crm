@@ -1,32 +1,52 @@
-# Servicentro B&B — CRM
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Servicentro B&B</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+<body>
 
-CRM interno para Servicentro B&B (venta de repuestos y lubricantes).
+  <!-- ============ PANTALLA DE LOGIN ============ -->
+  <div id="pantalla-login" class="pantalla">
+    <div class="login-card">
+      <img src="assets/img/logo.png" alt="Servicentro B&B" class="logo-login" />
+      <p>Ingresa con tu cuenta de Gmail autorizada.</p>
+      <button id="btn-login-google" class="btn btn-primario">Iniciar sesión con Google</button>
+    </div>
+  </div>
 
-- **Stack:** HTML/CSS/JS vanilla con ES Modules nativos (sin build, sin frameworks).
-- **Base de datos y auth:** Supabase (Postgres + RLS + Google OAuth).
-- **Arquitectura:** un archivo por módulo de negocio, patrón de registro tipo
-  "plugin". Ver [ARCHITECTURE.md](./ARCHITECTURE.md) antes de tocar código.
+  <!-- ============ PANTALLA PRINCIPAL DE LA APP ============ -->
+  <div id="pantalla-app" class="pantalla oculto">
 
-## Cómo correr localmente
+    <header class="app-header">
+      <div class="app-header-top">
+        <div class="usuario-info">
+          <span id="nombre-usuario-activo"></span>
+          <button id="btn-cerrar-sesion" class="btn-cerrar-sesion">Cerrar sesión</button>
+        </div>
+        <img src="assets/img/logo.png" alt="Servicentro B&B" class="logo-header" />
+      </div>
 
-Como usa ES Modules nativos, no puedes abrir `index.html` directo con
-`file://` (los navegadores bloquean `import` en ese contexto). Sirve la
-carpeta con cualquier servidor estático simple, por ejemplo:
+      <!-- Pestañas fijas: generadas por core/ui.js a partir del registro de módulos. -->
+      <nav id="tabs-nav" class="tabs-nav"></nav>
+    </header>
 
-```bash
-npx serve .
-# o
-python3 -m http.server 8080
-```
+    <main id="main-content" class="main-content"></main>
 
-## Configuración pendiente antes de usar
+  </div>
 
-1. Crear el proyecto en Supabase y ejecutar los archivos de `sql/` en orden
-   (001 → 004) en el SQL Editor.
-2. Habilitar Google como proveedor en Authentication → Providers.
-3. Reemplazar los placeholders en `core/supabase-client.js` con la URL y
-   anon key del proyecto.
-4. Cargar los usuarios en la tabla `usuarios` (ver comentario en
-   `sql/001_usuarios.sql`).
-5. Confirmar la clase de riesgo ARL antes de usar el módulo de Nómina (ver
-   `core/helpers/nomina-calculos.js`).
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Único punto de entrada de JS. Toda la lógica vive en core/ y modules/. -->
+  <script type="module" src="core/app.js"></script>
+
+</body>
+</html>
