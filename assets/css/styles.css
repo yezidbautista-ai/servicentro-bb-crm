@@ -467,3 +467,35 @@ h3 {
   margin-top: 1rem;
   flex-wrap: wrap;
 }
+
+/* ---------- Layout de dos columnas: Ingresos | Salidas ---------- */
+.grid-dos-columnas {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.25rem;
+  align-items: start;
+  margin-bottom: 1.25rem;
+}
+
+@media (max-width: 768px) {
+  .grid-dos-columnas { grid-template-columns: 1fr; }
+}
+
+.grid-dos-columnas .tarjeta { margin-bottom: 0; height: 100%; }
+
+/* ---------- Cierre de Caja: versión grande y protagónica del recibo ---------- */
+.recibo-cierre {
+  border-top: 5px solid var(--color-rojo);
+  padding: 2rem;
+}
+
+.recibo-cierre .recibo-header {
+  font-size: 1.1rem;
+  letter-spacing: 0.18em;
+  color: var(--color-negro);
+  padding-bottom: 1rem;
+  margin-bottom: 1rem;
+}
+
+.recibo-cierre .recibo-linea { font-size: 0.95rem; padding: 0.4rem 0; }
+.recibo-cierre .recibo-total { font-size: 1.25rem; }
