@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Servicentro B&B</title>
+  <link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+<body>
+
+  <!-- ============ PANTALLA DE LOGIN ============ -->
+  <div id="pantalla-login" class="pantalla">
+    <div class="login-card">
+      <h1>Servicentro B&amp;B</h1>
+      <p>Ingresa con tu cuenta de Gmail autorizada.</p>
+      <button id="btn-login-google" class="btn btn-primario">Iniciar sesión con Google</button>
+    </div>
+  </div>
+
+  <!-- ============ PANTALLA PRINCIPAL DE LA APP ============ -->
+  <div id="pantalla-app" class="pantalla oculto">
+
+    <header class="topbar">
+      <button id="btn-hamburguesa" class="btn-hamburguesa" aria-label="Abrir menú">☰</button>
+      <span class="topbar-titulo">Servicentro B&amp;B</span>
+    </header>
+
+    <!-- Drawer lateral: la lista de módulos la genera core/ui.js a partir
+         del registro de módulos, no está hardcodeada aquí. -->
+    <nav id="drawer" class="drawer">
+      <div class="drawer-header">
+        <span id="drawer-nombre-usuario"></span>
+      </div>
+      <div id="drawer-nav" class="drawer-nav"></div>
+      <button id="btn-cerrar-sesion" class="btn btn-secundario drawer-footer">Cerrar sesión</button>
+    </nav>
+    <div id="drawer-overlay" class="drawer-overlay"></div>
+
+    <main id="main-content" class="main-content"></main>
+
+  </div>
+
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Único punto de entrada de JS. Toda la lógica vive en core/ y modules/. -->
+  <script type="module" src="core/app.js"></script>
+
+</body>
+</html>
