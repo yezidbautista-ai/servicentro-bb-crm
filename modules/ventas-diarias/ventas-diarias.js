@@ -180,10 +180,12 @@ function pintarContenido(container) {
 
   contenido.innerHTML = `
     ${v?.enviado ? renderEtiquetaEnviado(v) : ''}
-    ${renderFormularioIngresos()}
-    ${v ? renderSalidas() : '<p class="mensaje-vacio">Guarda los ingresos del día para poder registrar salidas.</p>'}
-    ${renderPagosDiarios()}
+    <div class="grid-dos-columnas">
+      ${renderFormularioIngresos()}
+      ${v ? renderSalidas() : '<section class="tarjeta"><p class="mensaje-vacio">Guarda los ingresos del día para poder registrar salidas.</p></section>'}
+    </div>
     ${v ? renderTotales() : ''}
+    ${renderPagosDiarios()}
     ${v ? renderAccionesFinales() : ''}
   `;
 
@@ -374,8 +376,8 @@ function renderTotales() {
   const v = estado.ventaDiaria;
   const totalDigitalBruto = v.ventas_datafono + v.ventas_nequi + v.ventas_daviplata + v.ventas_transferencia;
   return `
-    <div class="recibo">
-      <div class="recibo-header">Totales del día — ${v.fecha}</div>
+    <div class="recibo recibo-cierre">
+      <div class="recibo-header">Cierre de Caja — Local Comercial · ${v.fecha}</div>
       <div class="recibo-linea"><span>Dinero base (para vueltas)</span><span class="monto">${formatCOP(v.dinero_base)}</span></div>
       <div class="recibo-divisor"></div>
       <div class="recibo-linea"><span>Total en efectivo (ventas)</span><span class="monto">${formatCOP(v.ventas_efectivo)}</span></div>
