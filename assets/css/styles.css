@@ -184,3 +184,81 @@ body {
   box-shadow: var(--sombra);
   font-size: 0.9rem;
 }
+
+.toast-exito { background: var(--color-primario); }
+.toast-error { background: var(--color-vencido); }
+
+/* ---------- Tarjetas y formularios (Ventas Diarias y módulos futuros) ---------- */
+.tarjeta {
+  background: var(--color-superficie);
+  border: 1px solid var(--color-borde);
+  border-radius: var(--radio);
+  padding: 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+.tarjeta h3 { margin-top: 0; }
+
+.controles-fecha {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+
+.controles-fecha label,
+.form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--color-texto-suave);
+}
+
+.controles-fecha input,
+.controles-fecha select,
+.form-grid input,
+.form-grid select {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--color-borde);
+  border-radius: 6px;
+  font-size: 0.95rem;
+  font-family: inherit;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  align-items: end;
+}
+
+.lista-totales {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tabla-simple {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+}
+
+.tabla-simple th,
+.tabla-simple td {
+  text-align: left;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--color-borde);
+  font-size: 0.9rem;
+}
+
+.btn-eliminar-salida {
+  background: none;
+  border: none;
+  color: var(--color-vencido);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
