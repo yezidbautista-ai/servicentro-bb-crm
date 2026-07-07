@@ -458,7 +458,17 @@ h3 {
 .recibo-total {
   font-weight: 700;
   font-size: 1.05rem;
-  color: var(--color-rojo);
+  color: var(--color-negro);
+}
+
+.recibo-leyenda {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--color-texto-suave);
+  margin-bottom: 0.75rem;
+  font-family: var(--font-cuerpo);
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 .acciones-exportar {
@@ -483,6 +493,21 @@ h3 {
 
 .grid-dos-columnas .tarjeta { margin-bottom: 0; height: 100%; }
 
+.tabla-ingresos-salidas td:first-child { color: var(--color-texto-suave); }
+.tabla-ingresos-salidas .fila-secundaria td:first-child { font-style: italic; }
+
+.tabla-simple tr.fila-total td {
+  border-top: 2px solid var(--color-negro);
+  border-bottom: none;
+  font-weight: 700;
+  padding-top: 0.75rem;
+  color: var(--color-negro);
+}
+
+/* ---------- Colores de trazabilidad: azul = viene de Ingresos, rojo = viene de Salidas ---------- */
+.total-ingresos, .monto-ingreso { color: var(--color-azul) !important; }
+.total-salidas, .monto-salida { color: var(--color-rojo) !important; }
+
 /* ---------- Cierre de Caja: versión grande y protagónica del recibo ---------- */
 .recibo-cierre {
   border-top: 5px solid var(--color-rojo);
@@ -493,8 +518,8 @@ h3 {
   font-size: 1.1rem;
   letter-spacing: 0.18em;
   color: var(--color-negro);
-  padding-bottom: 1rem;
-  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.25rem;
 }
 
 .recibo-cierre .recibo-linea { font-size: 0.95rem; padding: 0.4rem 0; }
