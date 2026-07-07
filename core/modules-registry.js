@@ -43,6 +43,15 @@ export function getSubModulesForRole(parentId, rol) {
   return registro.filter((m) => m.parentId === parentId && m.roles.includes(rol));
 }
 
+/**
+ * Todos los módulos (de primer nivel Y subpestañas) visibles para un rol,
+ * en una sola lista en orden de registro. Se usa para la barra de pestañas
+ * fija superior, que no distingue visualmente niveles de jerarquía.
+ */
+export function getFlatModulesForRole(rol) {
+  return registro.filter((m) => m.roles.includes(rol));
+}
+
 export function getModuleById(id) {
   return registro.find((m) => m.id === id);
 }

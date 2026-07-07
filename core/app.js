@@ -12,7 +12,7 @@ import {
   suscribirseACambiosDeSesion,
 } from './auth.js';
 import { initRouter, renderPrimerModuloDisponible } from './router.js';
-import { initDrawer } from './ui.js';
+import { initTabs } from './ui.js';
 
 // --- Registro de módulos (agregar aquí cada módulo nuevo) ---
 import '../modules/ventas-diarias/ventas-diarias.js';
@@ -50,7 +50,7 @@ function mostrarApp(perfil) {
   document.getElementById('pantalla-app').classList.remove('oculto');
 
   initRouter('#main-content');
-  initDrawer({
+  initTabs({
     rol: perfil.rol,
     nombreUsuario: perfil.nombre,
     onLogout: cerrarSesion,

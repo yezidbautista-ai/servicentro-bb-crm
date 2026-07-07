@@ -17,3 +17,27 @@ export function parseCOP(texto) {
   const limpio = String(texto ?? '').replace(/[^0-9-]/g, '');
   return Number(limpio) || 0;
 }
+
+/**
+ * Reformatea el valor de un input de moneda mientras el usuario escribe:
+ * deja solo dígitos y les pone el separador de miles (formato es-CO).
+ * El signo $ NO va aquí — se muestra por fuera del input, como prefijo fijo
+ * (ver clase .input-moneda en styles.css), para que nunca sea parte del texto.
+ */
+export function formatearMientrasEscribe(valorTexto) {
+  const soloDigitos = String(valorTexto ?? '').replace(/[^0-9]/g, '');
+  if (!soloDigitos) return '';
+  const numero = Number(soloDigitos);
+  return new Intl.NumberFormat('es-CO').format(numero);
+}
+
+/**
+ * Conecta un <input> para que se autoformatee con separador de miles en cada
+ * tecleo, manteniendo el cursor al final (suficiente para valores que se
+ * escriben de una vez, como en este CRM).
+ */
+export function activarInputMoneda(inputEl) {
+  inputEl.addEventListener('input', () => {
+    inputEl.value = formatearMientrasEscribe(inputEl.value);
+  });
+}

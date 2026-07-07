@@ -2,22 +2,32 @@
 //
 // Módulo 1 — Ventas Diarias (registro de caja).
 //
-// Reglas de negocio (ver PRD original):
-// - Salidas: múltiples por día, cada una con su propio método de pago.
-// - Ingresos: un valor por método, por día.
-// - Totales: NUNCA se digitan, siempre se leen de la vista `ventas_diarias_totales`
-//   (que ya descuenta las salidas por método correspondiente).
-// - Enero-junio 2026: se tratan como carga manual mensual (es_carga_manual = true),
-//   solo editable por administradores.
-// - Operativo: solo puede ver/editar el registro de HOY. La restricción real está
-//   en RLS (sql/002_ventas_diarias.sql); aquí solo ajustamos qué se le muestra.
+// Tarjetas, en orden: Ingresos del día → Salidas del día → Pagos Diarios
+// (visible para ambos roles, solo lectura) → Totales del día (recibo) →
+// Enviar/Exportar.
+//
+// Flujo de edición: al guardar ingresos por primera vez, los campos quedan
+// bloqueados (solo lectura) y aparece un botón "Editar". Al enviar el día
+// (con confirmación), TODO queda bloqueado permanentemente — reforzado con
+// triggers en la base de datos (sql/007), no solo en el frontend.
+//
+// Nota de seguridad de datos: la tarjeta "Pagos Diarios" muestra pagos a
+// proveedores (información financiera). A petición explícita, Fabian
+// (operativo) también la ve, pero solo los pagos de HOY — sql/008 le da
+// una política RLS de solo lectura acotada a fecha_pago = current_date,
+// sin abrirle el historial completo ni la ficha de proveedores.
 
 import { registerModule } from '../../core/modules-registry.js';
 import { supabase } from '../../core/supabase-client.js';
 import { getPerfilActual } from '../../core/auth.js';
-import { formatCOP, parseCOP } from '../../core/helpers/currency.js';
+import {
+  formatCOP,
+  parseCOP,
+  formatearMientrasEscribe,
+  activarInputMoneda,
+} from '../../core/helpers/currency.js';
 import { hoyISO } from '../../core/helpers/dates.js';
-import { mostrarToast } from '../../core/ui.js';
+import { mostrarToast, mostrarConfirmacion } from '../../core/ui.js';
 
 const METODOS_INGRESO = [
   { campo: 'ventas_efectivo', label: 'Ventas en efectivo' },
@@ -35,7 +45,6 @@ const METODOS_SALIDA = [
   { value: 'transferencia', label: 'Transferencia Bancolombia' },
 ];
 
-// Meses de carga manual pendiente (el control automatizado inicia en julio 2026).
 const MESES_MANUALES = [
   { valor: '2026-01-01', label: 'Enero 2026' },
   { valor: '2026-02-01', label: 'Febrero 2026' },
@@ -45,22 +54,29 @@ const MESES_MANUALES = [
   { valor: '2026-06-01', label: 'Junio 2026' },
 ];
 
-// Estado local del módulo (no compartido con otros módulos).
 const estado = {
   fecha: hoyISO(),
   esCargaManual: false,
-  ventaDiaria: null, // fila de ventas_diarias_totales, o null si aún no existe
+  ventaDiaria: null,
   salidas: [],
-  cargando: false,
+  pagosDiarios: [],
+  modoEdicionIngresos: false,
+  filaEditandoSalida: null,
 };
 
 function esAdmin() {
   return getPerfilActual()?.rol === 'admin';
 }
 
+function etiquetaMetodo(valor) {
+  return METODOS_SALIDA.find((m) => m.value === valor)?.label || valor;
+}
+
 async function render(container) {
   estado.fecha = hoyISO();
   estado.esCargaManual = false;
+  estado.modoEdicionIngresos = false;
+  estado.filaEditandoSalida = null;
 
   container.innerHTML = `
     <h2>Ventas Diarias</h2>
@@ -73,7 +89,9 @@ async function render(container) {
     inputFecha.addEventListener('change', (e) => {
       estado.fecha = e.target.value;
       estado.esCargaManual = false;
-      sincronizarSelectorMes(container, '');
+      estado.modoEdicionIngresos = false;
+      const selectorMes = container.querySelector('#selector-mes-manual');
+      if (selectorMes) selectorMes.value = '';
       cargarYRenderizar(container);
     });
 
@@ -82,6 +100,7 @@ async function render(container) {
       if (!e.target.value) return;
       estado.fecha = e.target.value;
       estado.esCargaManual = true;
+      estado.modoEdicionIngresos = false;
       inputFecha.value = '';
       cargarYRenderizar(container);
     });
@@ -112,11 +131,6 @@ function renderFechaFija() {
   return `<p class="mensaje-vacio">Registro del día: <strong>${estado.fecha}</strong></p>`;
 }
 
-function sincronizarSelectorMes(container, valor) {
-  const selector = container.querySelector('#selector-mes-manual');
-  if (selector) selector.value = valor;
-}
-
 async function cargarYRenderizar(container) {
   const contenido = container.querySelector('#ventas-diarias-contenido');
   contenido.innerHTML = '<p class="mensaje-vacio">Cargando…</p>';
@@ -134,6 +148,7 @@ async function cargarYRenderizar(container) {
   }
 
   estado.ventaDiaria = fila || null;
+  estado.modoEdicionIngresos = !fila; // si no existe aún, arranca en modo edición
 
   if (estado.ventaDiaria) {
     const { data: salidas, error: errorSalidas } = await supabase
@@ -141,40 +156,216 @@ async function cargarYRenderizar(container) {
       .select('*')
       .eq('venta_diaria_id', estado.ventaDiaria.id)
       .order('created_at', { ascending: true });
-
-    if (errorSalidas) {
-      console.error('Error cargando salidas_diarias:', errorSalidas);
-    }
+    if (errorSalidas) console.error('Error cargando salidas_diarias:', errorSalidas);
     estado.salidas = salidas || [];
   } else {
     estado.salidas = [];
   }
 
+  // Pagos Diarios: visible para ambos roles, pero el operativo solo puede
+  // leer (por RLS) los pagos con fecha_pago = hoy — ver sql/008.
+  const { data: pagos, error: errorPagos } = await supabase
+    .from('proveedores_pagos')
+    .select('*, proveedores(nombre)')
+    .eq('fecha_pago', estado.fecha);
+  if (errorPagos) console.error('Error cargando proveedores_pagos:', errorPagos);
+  estado.pagosDiarios = pagos || [];
+
+  pintarContenido(container);
+}
+
+function pintarContenido(container) {
+  const contenido = container.querySelector('#ventas-diarias-contenido');
+  const v = estado.ventaDiaria;
+
   contenido.innerHTML = `
+    ${v?.enviado ? renderEtiquetaEnviado(v) : ''}
     ${renderFormularioIngresos()}
-    ${estado.ventaDiaria ? renderTotales() : ''}
-    ${estado.ventaDiaria ? renderSalidas() : '<p class="mensaje-vacio">Guarda los ingresos del día para poder registrar salidas.</p>'}
+    ${v ? renderSalidas() : '<p class="mensaje-vacio">Guarda los ingresos del día para poder registrar salidas.</p>'}
+    ${renderPagosDiarios()}
+    ${v ? renderTotales() : ''}
+    ${v ? renderAccionesFinales() : ''}
   `;
 
   enlazarEventos(container);
+  container.querySelectorAll('.input-moneda input').forEach(activarInputMoneda);
+}
+
+function renderEtiquetaEnviado(v) {
+  const fechaEnvio = v.enviado_at ? new Date(v.enviado_at).toLocaleString('es-CO') : '';
+  return `<div class="etiqueta-enviado">✔ Enviado${fechaEnvio ? ' el ' + fechaEnvio : ''} — valores bloqueados</div>`;
+}
+
+function crearCampoMoneda(campo, label, valor, disabledAttr) {
+  const valorFormateado = valor ? formatearMientrasEscribe(String(valor)) : '';
+  return `
+    <label>
+      ${label}
+      <div class="input-moneda">
+        <span class="prefijo">$</span>
+        <input type="text" inputmode="numeric" placeholder="0" data-campo="${campo}"
+          value="${valorFormateado}" ${disabledAttr} />
+      </div>
+    </label>
+  `;
 }
 
 function renderFormularioIngresos() {
-  const v = estado.ventaDiaria || {};
+  const v = estado.ventaDiaria;
+  const enviado = v?.enviado;
+  const editable = !v || estado.modoEdicionIngresos;
+  const disabledAttr = editable ? '' : 'disabled';
+
+  const camposIngreso = METODOS_INGRESO.map((m) =>
+    crearCampoMoneda(m.campo, m.label, v?.[m.campo], disabledAttr)
+  ).join('');
+  const campoDineroBase = crearCampoMoneda('dinero_base', 'Dinero Base (para vueltas)', v?.dinero_base, disabledAttr);
+
+  let botones = '';
+  if (!v) {
+    botones = `<button type="submit" class="btn btn-primario">Guardar ingresos</button>`;
+  } else if (!enviado) {
+    botones = estado.modoEdicionIngresos
+      ? `
+        <button type="submit" class="btn btn-primario">Guardar cambios</button>
+        <button type="button" id="btn-cancelar-ingresos" class="btn btn-secundario">Cancelar</button>
+      `
+      : `<button type="button" id="btn-editar-ingresos" class="btn-editar">Editar ingresos</button>`;
+  }
+
   return `
     <section class="tarjeta">
       <h3>Ingresos del día${estado.esCargaManual ? ' (carga manual)' : ''}</h3>
       <form id="form-ingresos" class="form-grid">
-        ${METODOS_INGRESO.map(
-          (m) => `
-          <label>
-            ${m.label}
-            <input type="text" inputmode="numeric" data-campo="${m.campo}"
-              value="${formatCOP(v[m.campo] || 0)}" />
-          </label>`
-        ).join('')}
-        <button type="submit" class="btn btn-primario">Guardar ingresos</button>
+        ${camposIngreso}
+        ${campoDineroBase}
       </form>
+      <div class="acciones-tarjeta">${botones}</div>
+    </section>
+  `;
+}
+
+function renderSalidas() {
+  const v = estado.ventaDiaria;
+  const bloqueado = v.enviado;
+  return `
+    <section class="tarjeta">
+      <h3>Salidas del día</h3>
+      <table class="tabla-simple">
+        <thead>
+          <tr><th>Descripción</th><th>Valor</th><th>Método</th>${bloqueado ? '' : '<th></th>'}</tr>
+        </thead>
+        <tbody>
+          ${
+            estado.salidas.length
+              ? estado.salidas.map((s) => renderFilaSalida(s, bloqueado)).join('')
+              : `<tr><td colspan="4" class="mensaje-vacio">Sin salidas registradas.</td></tr>`
+          }
+        </tbody>
+      </table>
+      ${bloqueado ? '' : renderFormularioNuevaSalida()}
+    </section>
+  `;
+}
+
+function renderFilaSalida(s, bloqueado) {
+  if (!bloqueado && estado.filaEditandoSalida === s.id) {
+    return `
+      <tr data-id="${s.id}">
+        <td><input type="text" class="edit-descripcion" value="${s.descripcion}" /></td>
+        <td>
+          <div class="input-moneda">
+            <span class="prefijo">$</span>
+            <input type="text" inputmode="numeric" class="edit-valor" value="${formatearMientrasEscribe(String(s.valor))}" />
+          </div>
+        </td>
+        <td>
+          <select class="edit-metodo">
+            ${METODOS_SALIDA.map(
+              (m) => `<option value="${m.value}" ${m.value === s.metodo_pago ? 'selected' : ''}>${m.label}</option>`
+            ).join('')}
+          </select>
+        </td>
+        <td>
+          <button type="button" class="btn-editar-salida" data-accion="guardar" data-id="${s.id}">Guardar</button>
+          <button type="button" class="btn-eliminar-salida" data-accion="cancelar" data-id="${s.id}">Cancelar</button>
+        </td>
+      </tr>
+    `;
+  }
+
+  return `
+    <tr data-id="${s.id}">
+      <td>${s.descripcion}</td>
+      <td class="monto">${formatCOP(s.valor)}</td>
+      <td>${etiquetaMetodo(s.metodo_pago)}</td>
+      ${
+        bloqueado
+          ? ''
+          : `<td>
+              <button type="button" class="btn-editar-salida" data-accion="editar" data-id="${s.id}">Editar</button>
+              <button type="button" class="btn-eliminar-salida" data-accion="eliminar" data-id="${s.id}">Eliminar</button>
+            </td>`
+      }
+    </tr>
+  `;
+}
+
+function renderFormularioNuevaSalida() {
+  return `
+    <form id="form-salida" class="form-grid">
+      <label>Descripción <input type="text" id="salida-descripcion" required /></label>
+      <label>
+        Valor
+        <div class="input-moneda">
+          <span class="prefijo">$</span>
+          <input type="text" inputmode="numeric" placeholder="0" id="salida-valor" required />
+        </div>
+      </label>
+      <label>
+        Método de pago
+        <select id="salida-metodo">
+          ${METODOS_SALIDA.map((m) => `<option value="${m.value}">${m.label}</option>`).join('')}
+        </select>
+      </label>
+      <button type="submit" class="btn btn-secundario">Agregar salida</button>
+    </form>
+  `;
+}
+
+function renderPagosDiarios() {
+  const efectivoTotal = estado.pagosDiarios
+    .filter((p) => p.metodo_pago === 'efectivo')
+    .reduce((acc, p) => acc + Number(p.valor_pagado || p.valor || 0), 0);
+  const digitalTotal = estado.pagosDiarios
+    .filter((p) => p.metodo_pago && p.metodo_pago !== 'efectivo')
+    .reduce((acc, p) => acc + Number(p.valor_pagado || p.valor || 0), 0);
+
+  return `
+    <section class="tarjeta">
+      <h3>Pagos Diarios a proveedores (solo lectura)</h3>
+      <p class="mensaje-vacio">Se llena automáticamente desde Agenda de Pagos cuando se marca un pago como realizado con fecha de hoy.</p>
+      <table class="tabla-simple solo-lectura">
+        <thead><tr><th>Proveedor</th><th>Valor pagado</th><th>Método</th></tr></thead>
+        <tbody>
+          ${
+            estado.pagosDiarios.length
+              ? estado.pagosDiarios
+                  .map(
+                    (p) => `
+            <tr>
+              <td>${p.proveedores?.nombre || '—'}</td>
+              <td class="monto">${formatCOP(p.valor_pagado || p.valor)}</td>
+              <td>${p.metodo_pago ? etiquetaMetodo(p.metodo_pago) : '—'}</td>
+            </tr>`
+                  )
+                  .join('')
+              : '<tr><td colspan="3" class="mensaje-vacio">Sin pagos registrados hoy.</td></tr>'
+          }
+        </tbody>
+      </table>
+      <div class="recibo-linea"><span>Total pagado en efectivo (local)</span><span class="monto">${formatCOP(efectivoTotal)}</span></div>
+      <div class="recibo-linea"><span>Total pagado por medios digitales</span><span class="monto">${formatCOP(digitalTotal)}</span></div>
     </section>
   `;
 }
@@ -185,7 +376,9 @@ function renderTotales() {
   return `
     <div class="recibo">
       <div class="recibo-header">Totales del día — ${v.fecha}</div>
-      <div class="recibo-linea"><span>Total en efectivo</span><span class="monto">${formatCOP(v.ventas_efectivo)}</span></div>
+      <div class="recibo-linea"><span>Dinero base (para vueltas)</span><span class="monto">${formatCOP(v.dinero_base)}</span></div>
+      <div class="recibo-divisor"></div>
+      <div class="recibo-linea"><span>Total en efectivo (ventas)</span><span class="monto">${formatCOP(v.ventas_efectivo)}</span></div>
       <div class="recibo-linea"><span>Salidas en efectivo</span><span class="monto">− ${formatCOP(v.salidas_efectivo)}</span></div>
       <div class="recibo-linea recibo-total"><span>Efectivo neto en caja</span><span class="monto">${formatCOP(v.efectivo_neto)}</span></div>
       <div class="recibo-divisor"></div>
@@ -198,50 +391,18 @@ function renderTotales() {
   `;
 }
 
-function renderSalidas() {
+function renderAccionesFinales() {
+  const v = estado.ventaDiaria;
+  const botonEnviar = !v.enviado
+    ? `<button type="button" id="btn-enviar-dia" class="btn btn-primario">Enviar registro del día</button>`
+    : '';
   return `
-    <section class="tarjeta">
-      <h3>Salidas del día</h3>
-      <table class="tabla-simple">
-        <thead>
-          <tr><th>Descripción</th><th>Valor</th><th>Método</th><th></th></tr>
-        </thead>
-        <tbody>
-          ${
-            estado.salidas.length
-              ? estado.salidas
-                  .map(
-                    (s) => `
-            <tr data-id="${s.id}">
-              <td>${s.descripcion}</td>
-              <td class="monto">${formatCOP(s.valor)}</td>
-              <td>${etiquetaMetodo(s.metodo_pago)}</td>
-              <td><button type="button" class="btn-eliminar-salida" data-id="${s.id}">Eliminar</button></td>
-            </tr>`
-                  )
-                  .join('')
-              : '<tr><td colspan="4" class="mensaje-vacio">Sin salidas registradas.</td></tr>'
-          }
-        </tbody>
-      </table>
-
-      <form id="form-salida" class="form-grid">
-        <label>Descripción <input type="text" id="salida-descripcion" required /></label>
-        <label>Valor <input type="text" inputmode="numeric" id="salida-valor" required /></label>
-        <label>
-          Método de pago
-          <select id="salida-metodo">
-            ${METODOS_SALIDA.map((m) => `<option value="${m.value}">${m.label}</option>`).join('')}
-          </select>
-        </label>
-        <button type="submit" class="btn btn-secundario">Agregar salida</button>
-      </form>
-    </section>
+    <div class="acciones-exportar">
+      ${botonEnviar}
+      <button type="button" id="btn-exportar-pdf" class="btn btn-exportar">Exportar PDF</button>
+      <button type="button" id="btn-exportar-excel" class="btn btn-exportar">Exportar Excel</button>
+    </div>
   `;
-}
-
-function etiquetaMetodo(valor) {
-  return METODOS_SALIDA.find((m) => m.value === valor)?.label || valor;
 }
 
 function enlazarEventos(container) {
@@ -251,6 +412,20 @@ function enlazarEventos(container) {
       e.preventDefault();
       await guardarIngresos(container, formIngresos);
     });
+    const btnEditar = container.querySelector('#btn-editar-ingresos');
+    if (btnEditar) {
+      btnEditar.addEventListener('click', () => {
+        estado.modoEdicionIngresos = true;
+        pintarContenido(container);
+      });
+    }
+    const btnCancelar = container.querySelector('#btn-cancelar-ingresos');
+    if (btnCancelar) {
+      btnCancelar.addEventListener('click', () => {
+        estado.modoEdicionIngresos = false;
+        pintarContenido(container);
+      });
+    }
   }
 
   const formSalida = container.querySelector('#form-salida');
@@ -261,12 +436,39 @@ function enlazarEventos(container) {
     });
   }
 
-  container.querySelectorAll('.btn-eliminar-salida').forEach((btn) => {
+  container.querySelectorAll('.btn-editar-salida').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      if (!confirm('¿Eliminar esta salida?')) return;
-      await eliminarSalida(container, btn.dataset.id);
+      const { id, accion } = btn.dataset;
+      if (accion === 'editar') {
+        estado.filaEditandoSalida = id;
+        pintarContenido(container);
+      } else if (accion === 'guardar') {
+        await guardarEdicionSalida(container, id);
+      }
     });
   });
+
+  container.querySelectorAll('.btn-eliminar-salida').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const { id, accion } = btn.dataset;
+      if (accion === 'cancelar') {
+        estado.filaEditandoSalida = null;
+        pintarContenido(container);
+      } else if (accion === 'eliminar') {
+        if (!confirm('¿Eliminar esta salida?')) return;
+        await eliminarSalida(container, id);
+      }
+    });
+  });
+
+  const btnEnviar = container.querySelector('#btn-enviar-dia');
+  if (btnEnviar) btnEnviar.addEventListener('click', () => enviarDia(container));
+
+  const btnPdf = container.querySelector('#btn-exportar-pdf');
+  if (btnPdf) btnPdf.addEventListener('click', exportarPDF);
+
+  const btnExcel = container.querySelector('#btn-exportar-excel');
+  if (btnExcel) btnExcel.addEventListener('click', exportarExcel);
 }
 
 async function guardarIngresos(container, form) {
@@ -276,16 +478,18 @@ async function guardarIngresos(container, form) {
     const input = form.querySelector(`[data-campo="${m.campo}"]`);
     valores[m.campo] = parseCOP(input.value);
   });
+  const inputDineroBase = form.querySelector('[data-campo="dinero_base"]');
+  const dineroBase = parseCOP(inputDineroBase.value);
 
   const payload = {
     fecha: estado.fecha,
     ...valores,
+    dinero_base: dineroBase,
     es_carga_manual: estado.esCargaManual,
     updated_by: perfil?.id,
     updated_at: new Date().toISOString(),
   };
 
-  // Solo se envía created_by en la primera creación (si no existía antes).
   if (!estado.ventaDiaria) {
     payload.created_by = perfil?.id;
   }
@@ -299,6 +503,7 @@ async function guardarIngresos(container, form) {
   }
 
   mostrarToast('Ingresos guardados.', 'exito');
+  estado.modoEdicionIngresos = false;
   await cargarYRenderizar(container);
 }
 
@@ -333,6 +538,30 @@ async function agregarSalida(container, form) {
   await cargarYRenderizar(container);
 }
 
+async function guardarEdicionSalida(container, id) {
+  const fila = container.querySelector(`tr[data-id="${id}"]`);
+  const descripcion = fila.querySelector('.edit-descripcion').value.trim();
+  const valor = parseCOP(fila.querySelector('.edit-valor').value);
+  const metodo_pago = fila.querySelector('.edit-metodo').value;
+
+  if (!descripcion || valor <= 0) {
+    mostrarToast('Descripción y valor son obligatorios.', 'error');
+    return;
+  }
+
+  const { error } = await supabase.from('salidas_diarias').update({ descripcion, valor, metodo_pago }).eq('id', id);
+
+  if (error) {
+    console.error('Error editando salida:', error);
+    mostrarToast(`No se pudo guardar: ${error.message}`, 'error');
+    return;
+  }
+
+  estado.filaEditandoSalida = null;
+  mostrarToast('Salida actualizada.', 'exito');
+  await cargarYRenderizar(container);
+}
+
 async function eliminarSalida(container, id) {
   const { error } = await supabase.from('salidas_diarias').delete().eq('id', id);
   if (error) {
@@ -342,6 +571,155 @@ async function eliminarSalida(container, id) {
   }
   mostrarToast('Salida eliminada.', 'exito');
   await cargarYRenderizar(container);
+}
+
+async function enviarDia(container) {
+  const v = estado.ventaDiaria;
+  const confirmado = await mostrarConfirmacion({
+    titulo: 'Confirmar envío del día',
+    contenidoHTML: `
+      <p>Vas a enviar el registro del <strong>${v.fecha}</strong>. Una vez enviado, no se podrán modificar los ingresos ni las salidas de este día (ni siquiera un administrador podrá editarlos después).</p>
+      <p><strong>Efectivo neto en caja:</strong> ${formatCOP(v.efectivo_neto)}</p>
+      <p><strong>Digital neto:</strong> ${formatCOP(v.digital_neto)}</p>
+      <p><strong>Total venta diaria:</strong> ${formatCOP(v.total_venta_diaria)}</p>
+    `,
+    textoConfirmar: 'Sí, enviar y bloquear',
+  });
+  if (!confirmado) return;
+
+  const perfil = getPerfilActual();
+  const { error } = await supabase
+    .from('ventas_diarias')
+    .update({ enviado: true, enviado_por: perfil?.id, enviado_at: new Date().toISOString() })
+    .eq('id', v.id);
+
+  if (error) {
+    console.error('Error enviando el día:', error);
+    mostrarToast(`No se pudo enviar: ${error.message}`, 'error');
+    return;
+  }
+
+  mostrarToast('Registro del día enviado y bloqueado.', 'exito');
+  await cargarYRenderizar(container);
+}
+
+async function exportarPDF() {
+  try {
+    const { jsPDF } = await import('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/+esm');
+    const v = estado.ventaDiaria;
+    const doc = new jsPDF();
+    let y = 15;
+
+    doc.setFontSize(14);
+    doc.text(`Servicentro B&B - Ventas Diarias - ${v.fecha}`, 10, y);
+    y += 10;
+    doc.setFontSize(11);
+
+    doc.text('INGRESOS', 10, y);
+    y += 6;
+    METODOS_INGRESO.forEach((m) => {
+      doc.text(`${m.label}: ${formatCOP(v[m.campo])}`, 12, y);
+      y += 6;
+    });
+    doc.text(`Dinero base: ${formatCOP(v.dinero_base)}`, 12, y);
+    y += 10;
+
+    doc.text('SALIDAS', 10, y);
+    y += 6;
+    if (estado.salidas.length === 0) {
+      doc.text('Sin salidas registradas.', 12, y);
+      y += 6;
+    } else {
+      estado.salidas.forEach((s) => {
+        doc.text(`${s.descripcion} - ${formatCOP(s.valor)} - ${etiquetaMetodo(s.metodo_pago)}`, 12, y);
+        y += 6;
+      });
+    }
+    y += 4;
+
+    {
+      doc.text('PAGOS DIARIOS A PROVEEDORES', 10, y);
+      y += 6;
+      if (estado.pagosDiarios.length === 0) {
+        doc.text('Sin pagos registrados hoy.', 12, y);
+        y += 6;
+      } else {
+        estado.pagosDiarios.forEach((p) => {
+          doc.text(
+            `${p.proveedores?.nombre || '-'} - ${formatCOP(p.valor_pagado || p.valor)} - ${p.metodo_pago ? etiquetaMetodo(p.metodo_pago) : '-'}`,
+            12,
+            y
+          );
+          y += 6;
+        });
+      }
+      y += 4;
+    }
+
+    doc.text('TOTALES', 10, y);
+    y += 6;
+    doc.text(`Efectivo neto en caja: ${formatCOP(v.efectivo_neto)}`, 12, y);
+    y += 6;
+    doc.text(`Digital neto: ${formatCOP(v.digital_neto)}`, 12, y);
+    y += 6;
+    doc.text(`Total venta diaria: ${formatCOP(v.total_venta_diaria)}`, 12, y);
+
+    doc.save(`ventas-diarias-${v.fecha}.pdf`);
+  } catch (err) {
+    console.error('Error exportando PDF:', err);
+    mostrarToast('No se pudo exportar a PDF.', 'error');
+  }
+}
+
+async function exportarExcel() {
+  try {
+    const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
+    const v = estado.ventaDiaria;
+
+    const hojaIngresos = XLSX.utils.json_to_sheet([
+      { concepto: 'Ventas en efectivo', valor: v.ventas_efectivo },
+      { concepto: 'Ventas Datáfono', valor: v.ventas_datafono },
+      { concepto: 'Ventas Nequi', valor: v.ventas_nequi },
+      { concepto: 'Ventas Daviplata', valor: v.ventas_daviplata },
+      { concepto: 'Ventas transferencia', valor: v.ventas_transferencia },
+      { concepto: 'Dinero base', valor: v.dinero_base },
+    ]);
+
+    const hojaSalidas = XLSX.utils.json_to_sheet(
+      estado.salidas.map((s) => ({
+        descripcion: s.descripcion,
+        valor: s.valor,
+        metodo_pago: etiquetaMetodo(s.metodo_pago),
+      }))
+    );
+
+    const hojaTotales = XLSX.utils.json_to_sheet([
+      { concepto: 'Efectivo neto en caja', valor: v.efectivo_neto },
+      { concepto: 'Digital neto', valor: v.digital_neto },
+      { concepto: 'Total venta diaria', valor: v.total_venta_diaria },
+    ]);
+
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hojaIngresos, 'Ingresos');
+    XLSX.utils.book_append_sheet(libro, hojaSalidas, 'Salidas');
+
+    {
+      const hojaPagos = XLSX.utils.json_to_sheet(
+        estado.pagosDiarios.map((p) => ({
+          proveedor: p.proveedores?.nombre || '',
+          valor_pagado: p.valor_pagado || p.valor,
+          metodo_pago: p.metodo_pago ? etiquetaMetodo(p.metodo_pago) : '',
+        }))
+      );
+      XLSX.utils.book_append_sheet(libro, hojaPagos, 'Pagos Diarios');
+    }
+
+    XLSX.utils.book_append_sheet(libro, hojaTotales, 'Totales');
+    XLSX.writeFile(libro, `ventas-diarias-${v.fecha}.xlsx`);
+  } catch (err) {
+    console.error('Error exportando Excel:', err);
+    mostrarToast('No se pudo exportar a Excel.', 'error');
+  }
 }
 
 registerModule({

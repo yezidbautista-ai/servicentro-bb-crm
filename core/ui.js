@@ -1,60 +1,45 @@
 // core/ui.js
 //
-// Drawer lateral (mismo patrón visual de Fleet: botón ☰, panel deslizante, overlay),
-// pero alimentado desde el registro de módulos en vez de estar hardcodeado.
+// Barra superior fija: logo a la derecha, usuario + cerrar sesión a la
+// izquierda del logo, y una fila de pestañas horizontales alimentada desde
+// el registro de módulos (reemplaza el drawer tipo hamburguesa).
 
-import { getModulesForRole } from './modules-registry.js';
+import { getFlatModulesForRole } from './modules-registry.js';
 import { renderModulo } from './router.js';
 
-export function initDrawer({ rol, nombreUsuario, onLogout }) {
-  const drawer = document.getElementById('drawer');
-  const overlay = document.getElementById('drawer-overlay');
-  const btnHamburguesa = document.getElementById('btn-hamburguesa');
-  const nav = document.getElementById('drawer-nav');
-  const nombreEl = document.getElementById('drawer-nombre-usuario');
+export function initTabs({ rol, nombreUsuario, onLogout }) {
+  const nav = document.getElementById('tabs-nav');
+  const nombreEl = document.getElementById('nombre-usuario-activo');
   const btnSalir = document.getElementById('btn-cerrar-sesion');
 
   if (nombreEl) nombreEl.textContent = nombreUsuario || '';
-
-  function abrir() {
-    drawer.classList.add('abierto');
-    overlay.classList.add('visible');
-  }
-  function cerrar() {
-    drawer.classList.remove('abierto');
-    overlay.classList.remove('visible');
-  }
-
-  btnHamburguesa.addEventListener('click', abrir);
-  overlay.addEventListener('click', cerrar);
   if (btnSalir) btnSalir.addEventListener('click', onLogout);
 
-  const modulos = getModulesForRole(rol);
+  const modulos = getFlatModulesForRole(rol);
   nav.innerHTML = '';
 
   modulos.forEach((modulo) => {
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.className = 'drawer-item';
-    item.dataset.moduleId = modulo.id;
-    item.innerHTML = `<span class="drawer-icono">${modulo.icono}</span><span>${modulo.label}</span>`;
-    item.addEventListener('click', () => {
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = 'tab-item';
+    tab.dataset.moduleId = modulo.id;
+    tab.innerHTML = `<span class="tab-icono">${modulo.icono}</span><span>${modulo.label}</span>`;
+    tab.addEventListener('click', () => {
       renderModulo(modulo.id, rol);
       marcarActivo(modulo.id);
-      cerrar();
     });
-    nav.appendChild(item);
+    nav.appendChild(tab);
   });
 
   function marcarActivo(id) {
-    nav.querySelectorAll('.drawer-item').forEach((el) => {
+    nav.querySelectorAll('.tab-item').forEach((el) => {
       el.classList.toggle('activo', el.dataset.moduleId === id);
     });
   }
 
   if (modulos.length > 0) marcarActivo(modulos[0].id);
 
-  return { marcarActivo, cerrar, abrir };
+  return { marcarActivo };
 }
 
 export function mostrarToast(mensaje, tipo = 'info') {
@@ -68,4 +53,37 @@ export function mostrarToast(mensaje, tipo = 'info') {
   toast.textContent = mensaje;
   contenedor.appendChild(toast);
   setTimeout(() => toast.remove(), 4000);
+}
+
+/**
+ * Modal de confirmación genérico y reutilizable. Devuelve una Promise<boolean>
+ * que resuelve true si el usuario confirma, false si cancela.
+ */
+export function mostrarConfirmacion({ titulo, contenidoHTML, textoConfirmar = 'Confirmar', textoCancelar = 'Cancelar' }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-caja">
+        <h3>${titulo}</h3>
+        <div class="modal-contenido">${contenidoHTML}</div>
+        <div class="modal-acciones">
+          <button type="button" class="btn btn-secundario" id="modal-cancelar">${textoCancelar}</button>
+          <button type="button" class="btn btn-primario" id="modal-confirmar">${textoConfirmar}</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    function cerrar(resultado) {
+      overlay.remove();
+      resolve(resultado);
+    }
+
+    overlay.querySelector('#modal-cancelar').addEventListener('click', () => cerrar(false));
+    overlay.querySelector('#modal-confirmar').addEventListener('click', () => cerrar(true));
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) cerrar(false);
+    });
+  });
 }
