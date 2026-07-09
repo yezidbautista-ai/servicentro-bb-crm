@@ -213,6 +213,15 @@ h3 {
 .badge-pendiente { background: var(--color-pendiente); }
 .badge-pagado { background: var(--color-pagado); }
 .badge-vencido { background: var(--color-vencido); }
+.badge-activo { background: var(--color-azul); }
+.badge-inactivo { background: var(--color-texto-suave); }
+
+.tabla-scroll {
+  overflow-x: auto;
+  margin-bottom: 1rem;
+}
+
+.tabla-scroll .tabla-simple { min-width: 800px; }
 
 .etiqueta-enviado {
   display: inline-block;
