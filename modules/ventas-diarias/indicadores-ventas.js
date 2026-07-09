@@ -81,12 +81,33 @@ function pintarContenido(container) {
   contenido.innerHTML = `
     ${renderFiltros()}
     ${estado.todasLasFilas.length === 0 ? '<p class="mensaje-vacio">Todavía no hay ventas registradas.</p>' : ''}
+    ${estado.todasLasFilas.length > 0 ? renderDiasPendientes() : ''}
     ${estado.todasLasFilas.length > 0 ? renderDesglose() : ''}
     ${estado.todasLasFilas.length > 0 ? renderCierreNeto() : ''}
     ${estado.todasLasFilas.length > 0 ? renderComparativoMensual() : ''}
   `;
 
   enlazarEventos(container);
+}
+
+function renderDiasPendientes() {
+  const pendientes = estado.todasLasFilas.filter((f) => !f.enviado);
+  if (pendientes.length === 0) {
+    return `<div class="aviso-ok">✔ No hay días pendientes de enviar. Todo está al día.</div>`;
+  }
+  return `
+    <section class="tarjeta">
+      <h3>⚠ Días guardados pero no enviados (${pendientes.length})</h3>
+      <table class="tabla-simple">
+        <thead><tr><th>Fecha</th><th>Total venta diaria</th></tr></thead>
+        <tbody>
+          ${pendientes
+            .map((f) => `<tr><td>${f.fecha}</td><td class="monto">${formatCOP(f.total_venta_diaria)}</td></tr>`)
+            .join('')}
+        </tbody>
+      </table>
+    </section>
+  `;
 }
 
 function renderFiltros() {
