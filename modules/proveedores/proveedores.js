@@ -24,6 +24,8 @@ const estado = {
   proveedores: [],
   filtro: '',
   editandoId: null, // null = no hay formulario abierto; 'nuevo' = creando; id = editando
+  enlaceDrive: '',
+  editandoEnlaceDrive: false,
 };
 
 function etiquetaTipoCuenta(valor) {
@@ -55,6 +57,16 @@ async function cargarYRenderizar(container) {
   }
 
   estado.proveedores = data || [];
+
+  const { data: config, error: errorConfig } = await supabase
+    .from('configuracion')
+    .select('valor')
+    .eq('clave', 'drive_proveedores')
+    .maybeSingle();
+
+  if (errorConfig) console.error('Error cargando enlace de Drive:', errorConfig);
+  estado.enlaceDrive = config?.valor || '';
+
   pintarContenido(container);
 }
 
@@ -77,11 +89,39 @@ function proveedoresFiltrados() {
   );
 }
 
-function renderTarjetaLista() {
+function renderEnlaceDrive() {
+  if (estado.editandoEnlaceDrive) {
+    return `
+      <div class="bloque-enlace-drive">
+        <label>
+          Carpeta de Proveedores en Drive
+          <input type="url" id="input-enlace-drive" placeholder="https://drive.google.com/..." value="${estado.enlaceDrive}" />
+        </label>
+        <div class="acciones-tarjeta">
+          <button type="button" id="btn-guardar-enlace-drive" class="btn btn-primario">Guardar enlace</button>
+          <button type="button" id="btn-cancelar-enlace-drive" class="btn btn-secundario">Cancelar</button>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="bloque-enlace-drive">
+      ${
+        estado.enlaceDrive
+          ? `📁 <a href="${estado.enlaceDrive}" target="_blank" rel="noopener noreferrer">Abrir carpeta de Proveedores en Drive</a>`
+          : '<span class="mensaje-vacio">Sin enlace de Drive configurado todavía.</span>'
+      }
+      <button type="button" id="btn-editar-enlace-drive" class="btn-editar">${estado.enlaceDrive ? 'Editar enlace' : 'Agregar enlace'}</button>
+    </div>
+  `;
+}
   const lista = proveedoresFiltrados();
 
   return `
     <section class="tarjeta">
+      ${renderEnlaceDrive()}
+
       <div class="controles-fecha">
         <label>
           Buscar
@@ -117,6 +157,7 @@ function renderTarjetaLista() {
 
       <div class="acciones-tarjeta">
         <button type="button" id="btn-nuevo-proveedor" class="btn btn-primario">+ Nuevo proveedor</button>
+        <button type="button" id="btn-exportar-proveedores" class="btn btn-exportar">Exportar Excel</button>
       </div>
     </section>
   `;
@@ -192,12 +233,38 @@ function enlazarEventos(container) {
     });
   }
 
+  const btnEditarEnlace = container.querySelector('#btn-editar-enlace-drive');
+  if (btnEditarEnlace) {
+    btnEditarEnlace.addEventListener('click', () => {
+      estado.editandoEnlaceDrive = true;
+      pintarContenido(container);
+    });
+  }
+
+  const btnCancelarEnlace = container.querySelector('#btn-cancelar-enlace-drive');
+  if (btnCancelarEnlace) {
+    btnCancelarEnlace.addEventListener('click', () => {
+      estado.editandoEnlaceDrive = false;
+      pintarContenido(container);
+    });
+  }
+
+  const btnGuardarEnlace = container.querySelector('#btn-guardar-enlace-drive');
+  if (btnGuardarEnlace) {
+    btnGuardarEnlace.addEventListener('click', () => guardarEnlaceDrive(container));
+  }
+
   const btnNuevo = container.querySelector('#btn-nuevo-proveedor');
   if (btnNuevo) {
     btnNuevo.addEventListener('click', () => {
       estado.editandoId = 'nuevo';
       pintarContenido(container);
     });
+  }
+
+  const btnExportar = container.querySelector('#btn-exportar-proveedores');
+  if (btnExportar) {
+    btnExportar.addEventListener('click', exportarExcel);
   }
 
   container.querySelectorAll('.btn-editar-proveedor').forEach((btn) => {
@@ -226,6 +293,26 @@ function enlazarEventos(container) {
       await guardarProveedor(container, form);
     });
   }
+}
+
+async function guardarEnlaceDrive(container) {
+  const input = container.querySelector('#input-enlace-drive');
+  const valor = input.value.trim();
+
+  const { error } = await supabase
+    .from('configuracion')
+    .upsert({ clave: 'drive_proveedores', valor, updated_at: new Date().toISOString() }, { onConflict: 'clave' });
+
+  if (error) {
+    console.error('Error guardando enlace de Drive:', error);
+    mostrarToast(`No se pudo guardar el enlace: ${error.message}`, 'error');
+    return;
+  }
+
+  estado.enlaceDrive = valor;
+  estado.editandoEnlaceDrive = false;
+  mostrarToast('Enlace guardado.', 'exito');
+  pintarContenido(container);
 }
 
 async function guardarProveedor(container, form) {
@@ -276,6 +363,32 @@ async function toggleActivo(container, id, activoActual) {
   }
   mostrarToast(activoActual ? 'Proveedor desactivado.' : 'Proveedor activado.', 'exito');
   await cargarYRenderizar(container);
+}
+
+async function exportarExcel() {
+  try {
+    const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
+
+    const filas = proveedoresFiltrados().map((p) => ({
+      Nombre: p.nombre,
+      NIT: p.nit,
+      Contacto: p.contacto || '',
+      Teléfono: p.telefono || '',
+      Correo: p.correo || '',
+      Banco: p.banco || '',
+      'Tipo de cuenta': etiquetaTipoCuenta(p.tipo_cuenta),
+      'N° de cuenta': p.numero_cuenta || '',
+      Estado: p.activo ? 'Activo' : 'Inactivo',
+    }));
+
+    const hoja = XLSX.utils.json_to_sheet(filas);
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hoja, 'Proveedores');
+    XLSX.writeFile(libro, 'proveedores-servicentro-bb.xlsx');
+  } catch (err) {
+    console.error('Error exportando Excel:', err);
+    mostrarToast('No se pudo exportar a Excel.', 'error');
+  }
 }
 
 registerModule({
