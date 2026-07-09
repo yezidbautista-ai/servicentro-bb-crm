@@ -184,6 +184,7 @@ function pintarContenido(container) {
 
   contenido.innerHTML = `
     ${v?.enviado ? renderEtiquetaEnviado(v) : ''}
+    ${v && !v.enviado ? renderEtiquetaPendiente() : ''}
     <div class="grid-dos-columnas">
       ${renderFormularioIngresos()}
       ${v ? renderSalidas() : '<section class="tarjeta"><p class="mensaje-vacio">Guarda los ingresos del día para poder registrar salidas.</p></section>'}
@@ -200,6 +201,10 @@ function pintarContenido(container) {
 function renderEtiquetaEnviado(v) {
   const fechaEnvio = v.enviado_at ? new Date(v.enviado_at).toLocaleString('es-CO') : '';
   return `<div class="etiqueta-enviado">✔ Enviado${fechaEnvio ? ' el ' + fechaEnvio : ''} — valores bloqueados</div>`;
+}
+
+function renderEtiquetaPendiente() {
+  return `<div class="etiqueta-pendiente">⚠ Guardado, pendiente de enviar</div>`;
 }
 
 function crearCeldaMoneda(campo, valor, disabledAttr) {
@@ -430,11 +435,15 @@ function renderTotales() {
 function renderAccionesFinales() {
   const v = estado.ventaDiaria;
   const botonEnviar = !v.enviado
-    ? `<button type="button" id="btn-enviar-dia" class="btn btn-primario">Enviar registro del día</button>`
+    ? `<button type="button" id="btn-enviar-dia" class="btn btn-peligro">Enviar registro del día</button>`
+    : '';
+  const botonEliminar = !v.enviado
+    ? `<button type="button" id="btn-eliminar-dia" class="btn btn-secundario">Eliminar registro del día</button>`
     : '';
   return `
     <div class="acciones-exportar">
       ${botonEnviar}
+      ${botonEliminar}
       <button type="button" id="btn-exportar-pdf" class="btn btn-exportar">Exportar PDF</button>
       <button type="button" id="btn-exportar-excel" class="btn btn-exportar">Exportar Excel</button>
     </div>
@@ -500,6 +509,9 @@ function enlazarEventos(container) {
 
   const btnEnviar = container.querySelector('#btn-enviar-dia');
   if (btnEnviar) btnEnviar.addEventListener('click', () => enviarDia(container));
+
+  const btnEliminarDia = container.querySelector('#btn-eliminar-dia');
+  if (btnEliminarDia) btnEliminarDia.addEventListener('click', () => eliminarDiaCompleto(container));
 
   const btnPdf = container.querySelector('#btn-exportar-pdf');
   if (btnPdf) btnPdf.addEventListener('click', exportarPDF);
@@ -614,6 +626,30 @@ async function eliminarSalida(container, id) {
     return;
   }
   mostrarToast('Salida eliminada.', 'exito');
+  await cargarYRenderizar(container);
+}
+
+async function eliminarDiaCompleto(container) {
+  const v = estado.ventaDiaria;
+  const confirmado = await mostrarConfirmacion({
+    titulo: 'Eliminar registro del día',
+    contenidoHTML: `
+      <p>Vas a eliminar <strong>por completo</strong> el registro del <strong>${v.fecha}</strong>, incluyendo todos sus ingresos y salidas. Esta acción no se puede deshacer.</p>
+      <p>Solo es posible porque este día todavía no ha sido enviado.</p>
+    `,
+    textoConfirmar: 'Sí, eliminar todo',
+  });
+  if (!confirmado) return;
+
+  const { error } = await supabase.from('ventas_diarias').delete().eq('id', v.id);
+
+  if (error) {
+    console.error('Error eliminando el día:', error);
+    mostrarToast(`No se pudo eliminar: ${error.message}`, 'error');
+    return;
+  }
+
+  mostrarToast('Registro del día eliminado.', 'exito');
   await cargarYRenderizar(container);
 }
 
