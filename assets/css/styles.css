@@ -328,6 +328,27 @@ h3 {
   font-family: var(--font-cuerpo);
 }
 
+.etiqueta-pendiente {
+  display: inline-block;
+  background: var(--color-pendiente);
+  color: #fff;
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  margin-bottom: 1rem;
+  font-family: var(--font-cuerpo);
+}
+
+.aviso-ok {
+  background: rgba(30, 142, 90, 0.1);
+  color: var(--color-verde-oscuro);
+  border: 1px solid var(--color-verde);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.25rem;
+  font-size: 0.9rem;
+}
+
 /* ---------- Toasts ---------- */
 .toast-container {
   position: fixed;
@@ -507,10 +528,11 @@ h3 {
 .recibo {
   background: var(--color-superficie-recibo);
   border: 1px solid var(--color-borde);
-  border-radius: 4px;
-  padding: 1.5rem 1.5rem 1.25rem;
-  margin-bottom: 1.25rem;
-  font-family: var(--font-mono);
+  border-radius: 8px;
+  padding: 1.5rem 1.75rem;
+  margin: 0 auto 1.25rem;
+  max-width: 460px;
+  font-family: var(--font-cuerpo);
   position: relative;
   box-shadow: var(--sombra);
 }
@@ -534,10 +556,11 @@ h3 {
 .recibo-header {
   font-family: var(--font-display);
   text-transform: uppercase;
-  letter-spacing: 0.14em;
-  font-size: 0.8rem;
-  color: var(--color-texto-suave);
-  border-bottom: 1px dashed var(--color-borde);
+  letter-spacing: 0.08em;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--color-negro);
+  border-bottom: 2px solid var(--color-borde);
   padding-bottom: 0.6rem;
   margin-bottom: 0.6rem;
   text-align: center;
@@ -546,32 +569,33 @@ h3 {
 .recibo-linea {
   display: flex;
   justify-content: space-between;
-  gap: 1rem;
-  padding: 0.3rem 0;
-  font-size: 0.88rem;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.45rem 0;
+  font-size: 0.95rem;
 }
 
-.recibo-linea span:first-child { color: var(--color-texto-suave); }
+.recibo-linea span:first-child {
+  color: var(--color-texto-suave);
+}
 
 .recibo-divisor {
   border-top: 1px dashed var(--color-borde);
-  margin: 0.6rem 0;
+  margin: 0.5rem 0;
 }
 
 .recibo-total {
   font-weight: 700;
-  font-size: 1.05rem;
-  color: var(--color-negro);
+  font-size: 1.1rem;
 }
+
+.recibo-total span:first-child { color: var(--color-negro); }
 
 .recibo-leyenda {
   text-align: center;
   font-size: 0.75rem;
   color: var(--color-texto-suave);
   margin-bottom: 0.75rem;
-  font-family: var(--font-cuerpo);
-  text-transform: none;
-  letter-spacing: 0;
 }
 
 .acciones-exportar {
@@ -614,16 +638,6 @@ h3 {
 /* ---------- Cierre de Caja: versión grande y protagónica del recibo ---------- */
 .recibo-cierre {
   border-top: 4px solid var(--color-negro);
-  padding: 2rem;
+  max-width: 480px;
+  padding: 1.75rem 2rem;
 }
-
-.recibo-cierre .recibo-header {
-  font-size: 1.1rem;
-  letter-spacing: 0.18em;
-  color: var(--color-negro);
-  padding-bottom: 0.5rem;
-  margin-bottom: 0.25rem;
-}
-
-.recibo-cierre .recibo-linea { font-size: 0.95rem; padding: 0.4rem 0; }
-.recibo-cierre .recibo-total { font-size: 1.25rem; }
