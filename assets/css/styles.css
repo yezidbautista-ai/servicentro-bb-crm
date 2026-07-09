@@ -223,6 +223,40 @@ h3 {
 
 .tabla-scroll .tabla-simple { min-width: 800px; }
 
+.bloque-enlace-drive {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  background: var(--color-fondo);
+  border: 1px dashed var(--color-borde);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.bloque-enlace-drive a { color: var(--color-azul); font-weight: 600; }
+
+.bloque-enlace-drive label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--color-texto-suave);
+  text-transform: uppercase;
+  flex: 1;
+  min-width: 240px;
+}
+
+.bloque-enlace-drive input {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--color-borde);
+  border-radius: 6px;
+  font-size: 0.95rem;
+  font-family: var(--font-cuerpo);
+}
+
 .etiqueta-enviado {
   display: inline-block;
   background: var(--color-azul);
