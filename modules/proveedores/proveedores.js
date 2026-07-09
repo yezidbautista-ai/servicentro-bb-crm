@@ -7,6 +7,9 @@
 // así que aquí nunca se borra un proveedor: se desactiva (columna `activo`),
 // para no romper el historial de pagos ya existente.
 //
+// Cada proveedor tiene su propio enlace a Drive (columna enlace_drive) donde
+// se guardan sus documentos — no es un enlace genérico compartido.
+//
 // Solo administradores (roles: ['admin'] en el registro más abajo) — el
 // operativo ni siquiera puede navegar a esta pestaña, y aunque lo intentara
 // por API directa, RLS le niega el acceso (sql/003).
@@ -24,8 +27,6 @@ const estado = {
   proveedores: [],
   filtro: '',
   editandoId: null, // null = no hay formulario abierto; 'nuevo' = creando; id = editando
-  enlaceDrive: '',
-  editandoEnlaceDrive: false,
 };
 
 function etiquetaTipoCuenta(valor) {
@@ -57,16 +58,6 @@ async function cargarYRenderizar(container) {
   }
 
   estado.proveedores = data || [];
-
-  const { data: config, error: errorConfig } = await supabase
-    .from('configuracion')
-    .select('valor')
-    .eq('clave', 'drive_proveedores')
-    .maybeSingle();
-
-  if (errorConfig) console.error('Error cargando enlace de Drive:', errorConfig);
-  estado.enlaceDrive = config?.valor || '';
-
   pintarContenido(container);
 }
 
@@ -89,41 +80,11 @@ function proveedoresFiltrados() {
   );
 }
 
-function renderEnlaceDrive() {
-  if (estado.editandoEnlaceDrive) {
-    return `
-      <div class="bloque-enlace-drive">
-        <label>
-          Carpeta de Proveedores en Drive
-          <input type="url" id="input-enlace-drive" placeholder="https://drive.google.com/..." value="${estado.enlaceDrive}" />
-        </label>
-        <div class="acciones-tarjeta">
-          <button type="button" id="btn-guardar-enlace-drive" class="btn btn-primario">Guardar enlace</button>
-          <button type="button" id="btn-cancelar-enlace-drive" class="btn btn-secundario">Cancelar</button>
-        </div>
-      </div>
-    `;
-  }
-
-  return `
-    <div class="bloque-enlace-drive">
-      ${
-        estado.enlaceDrive
-          ? `📁 <a href="${estado.enlaceDrive}" target="_blank" rel="noopener noreferrer">Abrir carpeta de Proveedores en Drive</a>`
-          : '<span class="mensaje-vacio">Sin enlace de Drive configurado todavía.</span>'
-      }
-      <button type="button" id="btn-editar-enlace-drive" class="btn-editar">${estado.enlaceDrive ? 'Editar enlace' : 'Agregar enlace'}</button>
-    </div>
-  `;
-}
-
 function renderTarjetaLista() {
   const lista = proveedoresFiltrados();
 
   return `
     <section class="tarjeta">
-      ${renderEnlaceDrive()}
-
       <div class="controles-fecha">
         <label>
           Buscar
@@ -143,6 +104,7 @@ function renderTarjetaLista() {
               <th>Banco</th>
               <th>Tipo cuenta</th>
               <th>N° cuenta</th>
+              <th>Documentos</th>
               <th>Estado</th>
               <th></th>
             </tr>
@@ -151,7 +113,7 @@ function renderTarjetaLista() {
             ${
               lista.length
                 ? lista.map((p) => renderFilaProveedor(p)).join('')
-                : '<tr><td colspan="10" class="mensaje-vacio">Sin proveedores registrados todavía.</td></tr>'
+                : '<tr><td colspan="11" class="mensaje-vacio">Sin proveedores registrados todavía.</td></tr>'
             }
           </tbody>
         </table>
@@ -176,6 +138,7 @@ function renderFilaProveedor(p) {
       <td>${p.banco || '—'}</td>
       <td>${etiquetaTipoCuenta(p.tipo_cuenta)}</td>
       <td>${p.numero_cuenta || '—'}</td>
+      <td>${p.enlace_drive ? `<a href="${p.enlace_drive}" target="_blank" rel="noopener noreferrer">Abrir</a>` : '—'}</td>
       <td><span class="badge ${p.activo ? 'badge-activo' : 'badge-inactivo'}">${p.activo ? 'Activo' : 'Inactivo'}</span></td>
       <td>
         <button type="button" class="btn-editar-salida btn-editar-proveedor" data-id="${p.id}">Editar</button>
@@ -211,6 +174,7 @@ function renderFormulario() {
           </select>
         </label>
         <label>Número de cuenta <input type="text" id="prov-numero-cuenta" value="${p?.numero_cuenta || ''}" /></label>
+        <label>Enlace a documentos (Drive) <input type="url" id="prov-enlace-drive" placeholder="https://drive.google.com/..." value="${p?.enlace_drive || ''}" /></label>
       </form>
       <div class="acciones-tarjeta">
         <button type="submit" form="form-proveedor" class="btn btn-primario">Guardar proveedor</button>
@@ -233,27 +197,6 @@ function enlazarEventos(container) {
         nuevoInput.setSelectionRange(nuevoInput.value.length, nuevoInput.value.length);
       }
     });
-  }
-
-  const btnEditarEnlace = container.querySelector('#btn-editar-enlace-drive');
-  if (btnEditarEnlace) {
-    btnEditarEnlace.addEventListener('click', () => {
-      estado.editandoEnlaceDrive = true;
-      pintarContenido(container);
-    });
-  }
-
-  const btnCancelarEnlace = container.querySelector('#btn-cancelar-enlace-drive');
-  if (btnCancelarEnlace) {
-    btnCancelarEnlace.addEventListener('click', () => {
-      estado.editandoEnlaceDrive = false;
-      pintarContenido(container);
-    });
-  }
-
-  const btnGuardarEnlace = container.querySelector('#btn-guardar-enlace-drive');
-  if (btnGuardarEnlace) {
-    btnGuardarEnlace.addEventListener('click', () => guardarEnlaceDrive(container));
   }
 
   const btnNuevo = container.querySelector('#btn-nuevo-proveedor');
@@ -297,26 +240,6 @@ function enlazarEventos(container) {
   }
 }
 
-async function guardarEnlaceDrive(container) {
-  const input = container.querySelector('#input-enlace-drive');
-  const valor = input.value.trim();
-
-  const { error } = await supabase
-    .from('configuracion')
-    .upsert({ clave: 'drive_proveedores', valor, updated_at: new Date().toISOString() }, { onConflict: 'clave' });
-
-  if (error) {
-    console.error('Error guardando enlace de Drive:', error);
-    mostrarToast(`No se pudo guardar el enlace: ${error.message}`, 'error');
-    return;
-  }
-
-  estado.enlaceDrive = valor;
-  estado.editandoEnlaceDrive = false;
-  mostrarToast('Enlace guardado.', 'exito');
-  pintarContenido(container);
-}
-
 async function guardarProveedor(container, form) {
   const nombre = form.querySelector('#prov-nombre').value.trim();
   const nit = form.querySelector('#prov-nit').value.trim();
@@ -326,13 +249,14 @@ async function guardarProveedor(container, form) {
   const banco = form.querySelector('#prov-banco').value.trim();
   const tipo_cuenta = form.querySelector('#prov-tipo-cuenta').value || null;
   const numero_cuenta = form.querySelector('#prov-numero-cuenta').value.trim();
+  const enlace_drive = form.querySelector('#prov-enlace-drive').value.trim();
 
   if (!nombre || !nit) {
     mostrarToast('Nombre y NIT son obligatorios.', 'error');
     return;
   }
 
-  const payload = { nombre, nit, contacto, telefono, correo, banco, tipo_cuenta, numero_cuenta };
+  const payload = { nombre, nit, contacto, telefono, correo, banco, tipo_cuenta, numero_cuenta, enlace_drive };
 
   let error;
   if (estado.editandoId === 'nuevo') {
@@ -380,6 +304,7 @@ async function exportarExcel() {
       Banco: p.banco || '',
       'Tipo de cuenta': etiquetaTipoCuenta(p.tipo_cuenta),
       'N° de cuenta': p.numero_cuenta || '',
+      'Enlace Drive': p.enlace_drive || '',
       Estado: p.activo ? 'Activo' : 'Inactivo',
     }));
 
