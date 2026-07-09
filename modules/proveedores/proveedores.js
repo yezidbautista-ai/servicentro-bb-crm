@@ -116,6 +116,8 @@ function renderEnlaceDrive() {
     </div>
   `;
 }
+
+function renderTarjetaLista() {
   const lista = proveedoresFiltrados();
 
   return `
