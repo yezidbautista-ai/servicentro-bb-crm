@@ -416,6 +416,7 @@ function renderTotales() {
       <div class="recibo-linea"><span>Total en efectivo (ventas)</span><span class="monto monto-ingreso">${formatCOP(v.ventas_efectivo)}</span></div>
       <div class="recibo-linea"><span>Salidas en efectivo</span><span class="monto monto-salida">− ${formatCOP(v.salidas_efectivo)}</span></div>
       <div class="recibo-linea recibo-total"><span>Efectivo neto en caja</span><span class="monto">${formatCOP(v.efectivo_neto)}</span></div>
+      <div class="recibo-linea"><span>💰 Efectivo en Sobre (cerrar y dejar solo la base en caja)</span><span class="monto">${formatCOP(v.efectivo_neto)}</span></div>
       <div class="recibo-divisor"></div>
       <div class="recibo-linea"><span>Total dinero digital (bruto)</span><span class="monto monto-ingreso">${formatCOP(totalDigitalBruto)}</span></div>
       <div class="recibo-linea"><span>Salidas por medios digitales</span><span class="monto monto-salida">− ${formatCOP(v.salidas_digital)}</span></div>
