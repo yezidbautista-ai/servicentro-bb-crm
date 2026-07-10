@@ -36,7 +36,8 @@ const METODOS_INGRESO = [
   { campo: 'ventas_datafono', label: 'Datáfono' },
   { campo: 'ventas_nequi', label: 'Nequi' },
   { campo: 'ventas_daviplata', label: 'Daviplata' },
-  { campo: 'ventas_transferencia', label: 'Transferencia Bancolombia' },
+  { campo: 'ventas_transferencia_bancolombia', label: 'Transferencia Bancolombia' },
+  { campo: 'ventas_transferencia_bancodebogota', label: 'Transferencia Banco de Bogotá' },
 ];
 
 const METODOS_SALIDA = [
@@ -411,7 +412,8 @@ function renderPagosDiarios() {
 
 function renderTotales() {
   const v = estado.ventaDiaria;
-  const totalDigitalBruto = v.ventas_datafono + v.ventas_nequi + v.ventas_daviplata + v.ventas_transferencia;
+  const totalDigitalBruto =
+    v.ventas_datafono + v.ventas_nequi + v.ventas_daviplata + v.ventas_transferencia_bancolombia + v.ventas_transferencia_bancodebogota;
   return `
     <div class="recibo recibo-cierre">
       <div class="recibo-header">Cierre de Caja — Local Comercial · ${v.fecha}</div>
