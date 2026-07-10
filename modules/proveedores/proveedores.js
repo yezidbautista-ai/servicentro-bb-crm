@@ -64,10 +64,7 @@ async function cargarYRenderizar(container) {
 function pintarContenido(container) {
   const contenido = container.querySelector('#proveedores-contenido');
 
-  contenido.innerHTML = `
-    ${renderTarjetaLista()}
-    ${estado.editandoId !== null ? renderFormulario() : ''}
-  `;
+  contenido.innerHTML = `${renderTarjetaLista()}`;
 
   enlazarEventos(container);
 }
@@ -150,38 +147,62 @@ function renderFilaProveedor(p) {
   `;
 }
 
-function renderFormulario() {
-  const editando = estado.editandoId !== 'nuevo';
-  const p = editando ? estado.proveedores.find((x) => x.id === estado.editandoId) : null;
+function abrirModalProveedor(container, id) {
+  estado.editandoId = id;
+  const editando = id !== 'nuevo';
+  const p = editando ? estado.proveedores.find((x) => x.id === id) : null;
 
-  return `
-    <section class="tarjeta">
-      <h3>${editando ? 'Editar proveedor' : 'Nuevo proveedor'}</h3>
-      <form id="form-proveedor" class="form-grid">
-        <label>Nombre * <input type="text" id="prov-nombre" required value="${p?.nombre || ''}" /></label>
-        <label>NIT * <input type="text" id="prov-nit" required value="${p?.nit || ''}" /></label>
-        <label>Contacto <input type="text" id="prov-contacto" value="${p?.contacto || ''}" /></label>
-        <label>Teléfono <input type="text" id="prov-telefono" value="${p?.telefono || ''}" /></label>
-        <label>Correo electrónico <input type="email" id="prov-correo" value="${p?.correo || ''}" /></label>
-        <label>Banco <input type="text" id="prov-banco" value="${p?.banco || ''}" /></label>
-        <label>
-          Tipo de cuenta
-          <select id="prov-tipo-cuenta">
-            <option value="">— Seleccionar —</option>
-            ${TIPOS_CUENTA.map(
-              (t) => `<option value="${t.value}" ${p?.tipo_cuenta === t.value ? 'selected' : ''}>${t.label}</option>`
-            ).join('')}
-          </select>
-        </label>
-        <label>Número de cuenta <input type="text" id="prov-numero-cuenta" value="${p?.numero_cuenta || ''}" /></label>
-        <label>Enlace a documentos (Drive) <input type="url" id="prov-enlace-drive" placeholder="https://drive.google.com/..." value="${p?.enlace_drive || ''}" /></label>
-      </form>
-      <div class="acciones-tarjeta">
-        <button type="submit" form="form-proveedor" class="btn btn-primario">Guardar proveedor</button>
-        <button type="button" id="btn-cancelar-proveedor" class="btn btn-secundario">Cancelar</button>
-      </div>
-    </section>
+  const contenido = `
+    <h3>${editando ? 'Editar proveedor' : 'Nuevo proveedor'}</h3>
+    <form class="form-proveedor-modal form-grid">
+      <label>Nombre * <input type="text" class="pv-nombre" required value="${p?.nombre || ''}" /></label>
+      <label>NIT * <input type="text" class="pv-nit" required value="${p?.nit || ''}" /></label>
+      <label>Contacto <input type="text" class="pv-contacto" value="${p?.contacto || ''}" /></label>
+      <label>Teléfono <input type="text" class="pv-telefono" value="${p?.telefono || ''}" /></label>
+      <label>Correo electrónico <input type="email" class="pv-correo" value="${p?.correo || ''}" /></label>
+      <label>Banco <input type="text" class="pv-banco" value="${p?.banco || ''}" /></label>
+      <label>
+        Tipo de cuenta
+        <select class="pv-tipo-cuenta">
+          <option value="">— Seleccionar —</option>
+          ${TIPOS_CUENTA.map(
+            (t) => `<option value="${t.value}" ${p?.tipo_cuenta === t.value ? 'selected' : ''}>${t.label}</option>`
+          ).join('')}
+        </select>
+      </label>
+      <label>Número de cuenta <input type="text" class="pv-numero-cuenta" value="${p?.numero_cuenta || ''}" /></label>
+      <label>Enlace a documentos (Drive) <input type="url" class="pv-enlace-drive" placeholder="https://drive.google.com/..." value="${p?.enlace_drive || ''}" /></label>
+    </form>
+    <div class="acciones-tarjeta">
+      <button type="button" class="btn btn-primario btn-modal-guardar-proveedor">Guardar proveedor</button>
+      <button type="button" class="btn btn-secundario btn-modal-cancelar-proveedor">Cancelar</button>
+    </div>
   `;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `<div class="modal-caja modal-caja-ancha">${contenido}</div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+
+  const form = overlay.querySelector('.form-proveedor-modal');
+  const btnCancelar = overlay.querySelector('.btn-modal-cancelar-proveedor');
+  const btnGuardar = overlay.querySelector('.btn-modal-guardar-proveedor');
+
+  btnCancelar.addEventListener('click', () => {
+    estado.editandoId = null;
+    overlay.remove();
+  });
+
+  const enviar = async () => {
+    const exito = await guardarProveedor(container, form);
+    if (exito) overlay.remove();
+  };
+
+  form.addEventListener('submit', (e) => { e.preventDefault(); enviar(); });
+  btnGuardar.addEventListener('click', enviar);
 }
 
 function enlazarEventos(container) {
@@ -201,10 +222,7 @@ function enlazarEventos(container) {
 
   const btnNuevo = container.querySelector('#btn-nuevo-proveedor');
   if (btnNuevo) {
-    btnNuevo.addEventListener('click', () => {
-      estado.editandoId = 'nuevo';
-      pintarContenido(container);
-    });
+    btnNuevo.addEventListener('click', () => abrirModalProveedor(container, 'nuevo'));
   }
 
   const btnExportar = container.querySelector('#btn-exportar-proveedores');
@@ -213,47 +231,28 @@ function enlazarEventos(container) {
   }
 
   container.querySelectorAll('.btn-editar-proveedor').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      estado.editandoId = btn.dataset.id;
-      pintarContenido(container);
-    });
+    btn.addEventListener('click', () => abrirModalProveedor(container, btn.dataset.id));
   });
 
   container.querySelectorAll('.btn-toggle-activo').forEach((btn) => {
     btn.addEventListener('click', () => toggleActivo(container, btn.dataset.id, btn.dataset.activo === 'true'));
   });
-
-  const btnCancelar = container.querySelector('#btn-cancelar-proveedor');
-  if (btnCancelar) {
-    btnCancelar.addEventListener('click', () => {
-      estado.editandoId = null;
-      pintarContenido(container);
-    });
-  }
-
-  const form = container.querySelector('#form-proveedor');
-  if (form) {
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      await guardarProveedor(container, form);
-    });
-  }
 }
 
 async function guardarProveedor(container, form) {
-  const nombre = form.querySelector('#prov-nombre').value.trim();
-  const nit = form.querySelector('#prov-nit').value.trim();
-  const contacto = form.querySelector('#prov-contacto').value.trim();
-  const telefono = form.querySelector('#prov-telefono').value.trim();
-  const correo = form.querySelector('#prov-correo').value.trim();
-  const banco = form.querySelector('#prov-banco').value.trim();
-  const tipo_cuenta = form.querySelector('#prov-tipo-cuenta').value || null;
-  const numero_cuenta = form.querySelector('#prov-numero-cuenta').value.trim();
-  const enlace_drive = form.querySelector('#prov-enlace-drive').value.trim();
+  const nombre = form.querySelector('.pv-nombre').value.trim();
+  const nit = form.querySelector('.pv-nit').value.trim();
+  const contacto = form.querySelector('.pv-contacto').value.trim();
+  const telefono = form.querySelector('.pv-telefono').value.trim();
+  const correo = form.querySelector('.pv-correo').value.trim();
+  const banco = form.querySelector('.pv-banco').value.trim();
+  const tipo_cuenta = form.querySelector('.pv-tipo-cuenta').value || null;
+  const numero_cuenta = form.querySelector('.pv-numero-cuenta').value.trim();
+  const enlace_drive = form.querySelector('.pv-enlace-drive').value.trim();
 
   if (!nombre || !nit) {
     mostrarToast('Nombre y NIT son obligatorios.', 'error');
-    return;
+    return false;
   }
 
   const payload = { nombre, nit, contacto, telefono, correo, banco, tipo_cuenta, numero_cuenta, enlace_drive };
@@ -272,12 +271,13 @@ async function guardarProveedor(container, form) {
     } else {
       mostrarToast(`No se pudo guardar: ${error.message}`, 'error');
     }
-    return;
+    return false;
   }
 
   mostrarToast('Proveedor guardado.', 'exito');
   estado.editandoId = null;
   await cargarYRenderizar(container);
+  return true;
 }
 
 async function toggleActivo(container, id, activoActual) {
