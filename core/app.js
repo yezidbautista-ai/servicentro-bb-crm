@@ -19,6 +19,7 @@ import '../modules/ventas-diarias/ventas-diarias.js';
 import '../modules/ventas-diarias/indicadores-ventas.js';
 import '../modules/proveedores/proveedores.js';
 import '../modules/pagos-proveedores/agenda-pagos.js';
+import '../modules/saldos/saldos.js';
 import '../modules/gastos-fijos/gastos-fijos.js';
 import '../modules/gastos-fijos/nomina.js';
 import '../modules/contabilidad/contabilidad.js';
