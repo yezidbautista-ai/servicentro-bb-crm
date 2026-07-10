@@ -32,6 +32,25 @@ const METODOS_PAGO = [
   { value: 'transferencia', label: 'Transferencia Bancolombia' },
 ];
 
+// Deriva el método de pago a partir del código de la cuenta elegida, para
+// no pedir dos campos redundantes ("método de pago" y "de dónde salió el
+// dinero" son la misma cosa vista dos veces). Las dos cuentas de banco
+// (Bancolombia y Banco de Bogotá) comparten el método genérico
+// "transferencia" para efectos de indicadores, pero la cuenta_id sí
+// distingue cuál banco exacto se descuenta.
+const CODIGO_A_METODO = {
+  efectivo: 'efectivo',
+  datafono: 'datafono',
+  nequi: 'nequi',
+  daviplata: 'daviplata',
+  transferencia_bancolombia: 'transferencia',
+  transferencia_bancodebogota: 'transferencia',
+};
+
+function metodoDesdeCuenta(cuenta) {
+  return CODIGO_A_METODO[cuenta?.codigo] || null;
+}
+
 const ESTADOS_FILTRO = [
   { value: '', label: 'Todos', color: 'gris' },
   { value: 'pendiente', label: 'Pendiente', color: 'naranja' },
@@ -50,14 +69,9 @@ const estado = {
   registros: [],
   proveedoresActivos: [],
   cuentasActivas: [],
-  filtroProveedor: '',
-  filtroEstado: '',
-  filtroDesde: '',
-  filtroHasta: '',
   busquedaDia: '',
+  filtroEstado: '',
   editandoId: null,
-  mostrandoNuevoProveedor: false,
-  vistaPrincipal: 'dia', // 'dia' | 'tabla'
   mesCalendario: hoyISO().slice(0, 7),
   diaSeleccionado: hoyISO(),
 };
@@ -84,7 +98,6 @@ function nombreDiaLargo(fechaISO) {
 
 async function render(container) {
   estado.editandoId = null;
-  estado.mostrandoNuevoProveedor = false;
   estado.diaSeleccionado = hoyISO();
   estado.mesCalendario = hoyISO().slice(0, 7);
 
@@ -107,7 +120,7 @@ async function cargarYRenderizar(container) {
   ] = await Promise.all([
     supabase.from('proveedores_pagos').select('*, proveedores(nombre)').order('fecha_vencimiento', { ascending: true }),
     supabase.from('proveedores').select('id, nombre, contacto').eq('activo', true).order('nombre', { ascending: true }),
-    supabase.from('cuentas').select('id, nombre').eq('activa', true).order('nombre', { ascending: true }),
+    supabase.from('cuentas').select('id, nombre, codigo').eq('activa', true).order('nombre', { ascending: true }),
   ]);
 
   if (errorRegistros) {
@@ -124,14 +137,19 @@ async function cargarYRenderizar(container) {
   pintarContenido(container);
 }
 
-function registrosFiltrados() {
-  return estado.registros.filter((p) => {
-    if (estado.filtroProveedor && p.proveedor_id !== estado.filtroProveedor) return false;
-    if (estado.filtroEstado && estadoReal(p) !== estado.filtroEstado) return false;
-    if (estado.filtroDesde && p.fecha_vencimiento < estado.filtroDesde) return false;
-    if (estado.filtroHasta && p.fecha_vencimiento > estado.filtroHasta) return false;
-    return true;
-  });
+function filasDelDia() {
+  const fecha = estado.diaSeleccionado || hoyISO();
+  const busqueda = estado.busquedaDia.trim().toLowerCase();
+
+  return estado.registros
+    .filter((p) => p.fecha_vencimiento === fecha)
+    .filter((p) => (estado.filtroEstado ? estadoReal(p) === estado.filtroEstado : true))
+    .filter((p) => {
+      if (!busqueda) return true;
+      const texto = `${p.proveedores?.nombre || ''} ${p.vendedor || ''} ${p.numero_factura || ''}`.toLowerCase();
+      return texto.includes(busqueda);
+    })
+    .sort((a, b) => (a.proveedores?.nombre || '').localeCompare(b.proveedores?.nombre || ''));
 }
 
 function pintarContenido(container) {
@@ -146,10 +164,9 @@ function pintarContenido(container) {
       </aside>
       <div class="agenda-principal">
         ${renderSelectorVistaPrincipal()}
-        ${estado.vistaPrincipal === 'tabla' ? renderVistaTabla() : renderVistaDia()}
+        ${renderVistaDia()}
       </div>
     </div>
-    ${estado.editandoId !== null ? renderFormularioCompra() : ''}
   `;
 
   enlazarEventos(container);
@@ -259,10 +276,7 @@ function renderResumenMes() {
 function renderSelectorVistaPrincipal() {
   return `
     <div class="agenda-principal-header">
-      <div class="selector-vista">
-        <button type="button" class="tab-item ${estado.vistaPrincipal === 'dia' ? 'activo' : ''}" id="btn-vista-dia">Día seleccionado</button>
-        <button type="button" class="tab-item ${estado.vistaPrincipal === 'tabla' ? 'activo' : ''}" id="btn-vista-tabla">Tabla completa</button>
-      </div>
+      <h3>Día seleccionado</h3>
       <div class="agenda-principal-acciones">
         <button type="button" id="btn-nuevo-pago" class="btn btn-primario">+ Nueva compra</button>
         <button type="button" id="btn-exportar-pagos" class="btn btn-exportar">Exportar Excel</button>
@@ -273,18 +287,7 @@ function renderSelectorVistaPrincipal() {
 
 function renderVistaDia() {
   const fecha = estado.diaSeleccionado || hoyISO();
-  const busqueda = estado.busquedaDia.trim().toLowerCase();
-
-  const delDia = estado.registros
-    .filter((p) => p.fecha_vencimiento === fecha)
-    .filter((p) => (estado.filtroEstado ? estadoReal(p) === estado.filtroEstado : true))
-    .filter((p) => {
-      if (!busqueda) return true;
-      const texto = `${p.proveedores?.nombre || ''} ${p.vendedor || ''} ${p.numero_factura || ''}`.toLowerCase();
-      return texto.includes(busqueda);
-    })
-    .sort((a, b) => (a.proveedores?.nombre || '').localeCompare(b.proveedores?.nombre || ''));
-
+  const delDia = filasDelDia();
   const pendientesDelDia = delDia.filter((p) => estadoReal(p) !== 'pagado').length;
 
   return `
@@ -400,14 +403,7 @@ function abrirModalGestionar(container, id, overlayPadre) {
         </div>
       </label>
       <label>
-        Método de pago *
-        <select class="gm-metodo-pago" required>
-          <option value="">— Seleccionar —</option>
-          ${METODOS_PAGO.map((m) => `<option value="${m.value}">${m.label}</option>`).join('')}
-        </select>
-      </label>
-      <label>
-        ¿De dónde salieron los fondos? *
+        Cuenta de origen — de aquí sale el dinero *
         <select class="gm-cuenta" required>
           <option value="">— Seleccionar —</option>
           ${estado.cuentasActivas.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join('')}
@@ -443,135 +439,113 @@ function abrirModalGestionar(container, id, overlayPadre) {
   btnConfirmar.addEventListener('click', enviar);
 }
 
-function renderVistaTabla() {
-  const lista = registrosFiltrados();
+// ============ MODALES (compra, nuevo proveedor, gestionar pago) ============
 
-  return `
-    <section class="tarjeta">
-      <div class="controles-fecha">
-        <label>
-          Proveedor
-          <select id="filtro-proveedor">
-            <option value="">Todos</option>
-            ${estado.proveedoresActivos
-              .map((p) => `<option value="${p.id}" ${estado.filtroProveedor === p.id ? 'selected' : ''}>${p.nombre}</option>`)
-              .join('')}
-          </select>
-        </label>
-        <label>Vence desde <input type="date" id="filtro-desde" value="${estado.filtroDesde}" /></label>
-        <label>Vence hasta <input type="date" id="filtro-hasta" value="${estado.filtroHasta}" /></label>
-      </div>
+function abrirModalCompra(container, id) {
+  estado.editandoId = id;
+  const editando = id !== 'nuevo';
+  const p = editando ? estado.registros.find((x) => x.id === id) : null;
 
-      <div class="tabla-scroll">
-        <table class="tabla-simple">
-          <thead>
-            <tr>
-              <th>Proveedor</th><th>Vendedor</th><th>Factura</th><th>Fecha compra</th><th>Valor</th>
-              <th>Vence</th><th>Estado</th><th>Fecha pago</th><th>Valor pagado</th><th>Comprobante</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
-            ${
-              lista.length
-                ? lista.map((p) => renderFilaRegistro(p)).join('')
-                : '<tr><td colspan="11" class="mensaje-vacio">Sin registros con estos filtros.</td></tr>'
-            }
-          </tbody>
-        </table>
-      </div>
-    </section>
+  const contenido = `
+    <h3>${editando ? 'Editar compra / cuenta por pagar' : 'Nueva compra / cuenta por pagar'}</h3>
+    <form class="form-pago-modal form-grid">
+      <label>
+        Proveedor *
+        <select class="pg-proveedor" required>
+          <option value="">— Seleccionar —</option>
+          ${estado.proveedoresActivos
+            .map((pr) => `<option value="${pr.id}" ${p?.proveedor_id === pr.id ? 'selected' : ''}>${pr.nombre}</option>`)
+            .join('')}
+        </select>
+      </label>
+      <label>Vendedor <input type="text" class="pg-vendedor" value="${p?.vendedor || ''}" /></label>
+      <label>Número de factura <input type="text" class="pg-factura" value="${p?.numero_factura || ''}" /></label>
+      <label>Fecha de compra * <input type="date" class="pg-fecha-compra" required value="${p?.fecha_compra || hoyISO()}" /></label>
+      <label>
+        Valor *
+        <div class="input-moneda">
+          <span class="prefijo">$</span>
+          <input type="text" inputmode="numeric" placeholder="0" class="pg-valor" required value="${p ? formatearMientrasEscribe(String(p.valor)) : ''}" />
+        </div>
+      </label>
+      <label>Fecha de vencimiento * <input type="date" class="pg-fecha-vencimiento" required value="${p?.fecha_vencimiento || ''}" /></label>
+    </form>
+    <div class="acciones-tarjeta">
+      <button type="button" class="btn btn-primario btn-modal-guardar-compra">Guardar</button>
+      <button type="button" class="btn-editar btn-modal-nuevo-proveedor">+ Nuevo proveedor</button>
+      <button type="button" class="btn btn-secundario btn-modal-cancelar-compra">Cancelar</button>
+    </div>
   `;
+
+  const overlay = crearOverlayModal(contenido);
+  overlay.querySelectorAll('.input-moneda input').forEach(activarInputMoneda);
+
+  const form = overlay.querySelector('.form-pago-modal');
+
+  const selectProveedor = overlay.querySelector('.pg-proveedor');
+  selectProveedor.addEventListener('change', (e) => {
+    const proveedor = estado.proveedoresActivos.find((pr) => pr.id === e.target.value);
+    const inputVendedor = overlay.querySelector('.pg-vendedor');
+    if (proveedor && inputVendedor) inputVendedor.value = proveedor.contacto || '';
+  });
+
+  overlay.querySelector('.btn-modal-cancelar-compra').addEventListener('click', () => {
+    estado.editandoId = null;
+    overlay.remove();
+  });
+
+  overlay.querySelector('.btn-modal-nuevo-proveedor').addEventListener('click', () => {
+    abrirModalNuevoProveedor(container, overlay);
+  });
+
+  const enviar = async (e) => {
+    if (e) e.preventDefault();
+    const exito = await guardarCompra(container, form);
+    if (exito) overlay.remove();
+  };
+
+  form.addEventListener('submit', enviar);
+  overlay.querySelector('.btn-modal-guardar-compra').addEventListener('click', enviar);
 }
 
-function renderFilaRegistro(p) {
-  const real = estadoReal(p);
-  return `
-    <tr>
-      <td>${p.proveedores?.nombre || '—'}</td>
-      <td>${p.vendedor || '—'}</td>
-      <td>${p.numero_factura || '—'}</td>
-      <td>${p.fecha_compra}</td>
-      <td class="monto">${formatCOP(p.valor)}</td>
-      <td>${p.fecha_vencimiento}</td>
-      <td><span class="badge badge-${real}">${etiquetaEstado(real)}</span></td>
-      <td>${p.fecha_pago || '—'}</td>
-      <td class="monto">${p.valor_pagado ? formatCOP(p.valor_pagado) : '—'}</td>
-      <td>${p.numero_comprobante || '—'}</td>
-      <td>
-        ${real !== 'pagado' ? `<button type="button" class="btn-editar-salida btn-marcar-pagado" data-id="${p.id}">Marcar pagado</button>` : ''}
-        <button type="button" class="btn-editar-salida btn-editar-pago" data-id="${p.id}">Editar</button>
-      </td>
-    </tr>
+function abrirModalNuevoProveedor(container, overlayPadre) {
+  const contenido = `
+    <h3>Nuevo proveedor</h3>
+    <form class="form-nuevo-proveedor-modal form-grid">
+      <label>Nombre * <input type="text" class="np-nombre" required /></label>
+      <label>NIT * <input type="text" class="np-nit" required /></label>
+      <label>Contacto <input type="text" class="np-contacto" /></label>
+      <label>Teléfono <input type="text" class="np-telefono" /></label>
+      <label>Correo electrónico <input type="email" class="np-correo" /></label>
+      <label>Banco <input type="text" class="np-banco" /></label>
+      <label>
+        Tipo de cuenta
+        <select class="np-tipo-cuenta">
+          <option value="">— Seleccionar —</option>
+          ${TIPOS_CUENTA.map((t) => `<option value="${t.value}">${t.label}</option>`).join('')}
+        </select>
+      </label>
+      <label>Número de cuenta <input type="text" class="np-numero-cuenta" /></label>
+      <label>Enlace a documentos (Drive) <input type="url" class="np-enlace-drive" placeholder="https://drive.google.com/..." /></label>
+    </form>
+    <div class="acciones-tarjeta">
+      <button type="button" class="btn btn-primario btn-modal-crear-proveedor">Crear proveedor</button>
+      <button type="button" class="btn btn-secundario btn-modal-cancelar-nuevo-proveedor">Cancelar</button>
+    </div>
   `;
-}
 
-// ============ FORMULARIOS (compra, nuevo proveedor, gestionar pago) ============
+  const overlay = crearOverlayModal(contenido);
+  const form = overlay.querySelector('.form-nuevo-proveedor-modal');
 
-function renderFormularioCompra() {
-  const editando = estado.editandoId !== 'nuevo';
-  const p = editando ? estado.registros.find((x) => x.id === estado.editandoId) : null;
+  overlay.querySelector('.btn-modal-cancelar-nuevo-proveedor').addEventListener('click', () => overlay.remove());
 
-  return `
-    <section class="tarjeta">
-      <h3>${editando ? 'Editar compra / cuenta por pagar' : 'Nueva compra / cuenta por pagar'}</h3>
-      <form id="form-pago" class="form-grid">
-        <label>
-          Proveedor *
-          <select id="pago-proveedor" required>
-            <option value="">— Seleccionar —</option>
-            ${estado.proveedoresActivos
-              .map((pr) => `<option value="${pr.id}" ${p?.proveedor_id === pr.id ? 'selected' : ''}>${pr.nombre}</option>`)
-              .join('')}
-          </select>
-        </label>
-        <label>Vendedor <input type="text" id="pago-vendedor" value="${p?.vendedor || ''}" /></label>
-        <label>Número de factura <input type="text" id="pago-factura" value="${p?.numero_factura || ''}" /></label>
-        <label>Fecha de compra * <input type="date" id="pago-fecha-compra" required value="${p?.fecha_compra || hoyISO()}" /></label>
-        <label>
-          Valor *
-          <div class="input-moneda">
-            <span class="prefijo">$</span>
-            <input type="text" inputmode="numeric" placeholder="0" id="pago-valor" required value="${p ? formatearMientrasEscribe(String(p.valor)) : ''}" />
-          </div>
-        </label>
-        <label>Fecha de vencimiento * <input type="date" id="pago-fecha-vencimiento" required value="${p?.fecha_vencimiento || ''}" /></label>
-      </form>
-      <div class="acciones-tarjeta">
-        <button type="submit" form="form-pago" class="btn btn-primario">Guardar</button>
-        <button type="button" id="btn-toggle-nuevo-proveedor" class="btn-editar">${estado.mostrandoNuevoProveedor ? 'Cancelar nuevo proveedor' : '+ Nuevo proveedor'}</button>
-        <button type="button" id="btn-cancelar-pago" class="btn btn-secundario">Cancelar</button>
-      </div>
-    </section>
-    ${estado.mostrandoNuevoProveedor ? renderFormularioNuevoProveedor() : ''}
-  `;
-}
+  const enviar = async (e) => {
+    if (e) e.preventDefault();
+    await crearProveedorInline(container, form, overlay, overlayPadre);
+  };
 
-function renderFormularioNuevoProveedor() {
-  return `
-    <section class="tarjeta">
-      <h3>Nuevo proveedor</h3>
-      <form id="form-nuevo-proveedor" class="form-grid">
-        <label>Nombre * <input type="text" id="nprov-nombre" required /></label>
-        <label>NIT * <input type="text" id="nprov-nit" required /></label>
-        <label>Contacto <input type="text" id="nprov-contacto" /></label>
-        <label>Teléfono <input type="text" id="nprov-telefono" /></label>
-        <label>Correo electrónico <input type="email" id="nprov-correo" /></label>
-        <label>Banco <input type="text" id="nprov-banco" /></label>
-        <label>
-          Tipo de cuenta
-          <select id="nprov-tipo-cuenta">
-            <option value="">— Seleccionar —</option>
-            ${TIPOS_CUENTA.map((t) => `<option value="${t.value}">${t.label}</option>`).join('')}
-          </select>
-        </label>
-        <label>Número de cuenta <input type="text" id="nprov-numero-cuenta" /></label>
-        <label>Enlace a documentos (Drive) <input type="url" id="nprov-enlace-drive" placeholder="https://drive.google.com/..." /></label>
-      </form>
-      <div class="acciones-tarjeta">
-        <button type="submit" form="form-nuevo-proveedor" class="btn btn-primario">Crear proveedor</button>
-      </div>
-    </section>
-  `;
+  form.addEventListener('submit', enviar);
+  overlay.querySelector('.btn-modal-crear-proveedor').addEventListener('click', enviar);
 }
 
 // ============ EVENTOS ============
@@ -585,7 +559,6 @@ function enlazarEventos(container) {
   container.querySelectorAll('.celda-dia:not(.celda-vacia)').forEach((btn) => {
     btn.addEventListener('click', () => {
       estado.diaSeleccionado = btn.dataset.fecha;
-      estado.vistaPrincipal = 'dia';
       pintarContenido(container);
     });
   });
@@ -596,11 +569,6 @@ function enlazarEventos(container) {
       pintarContenido(container);
     });
   });
-
-  const btnVistaDia = container.querySelector('#btn-vista-dia');
-  if (btnVistaDia) btnVistaDia.addEventListener('click', () => { estado.vistaPrincipal = 'dia'; pintarContenido(container); });
-  const btnVistaTabla = container.querySelector('#btn-vista-tabla');
-  if (btnVistaTabla) btnVistaTabla.addEventListener('click', () => { estado.vistaPrincipal = 'tabla'; pintarContenido(container); });
 
   const busquedaDia = container.querySelector('#busqueda-dia');
   if (busquedaDia) {
@@ -616,46 +584,18 @@ function enlazarEventos(container) {
     btn.addEventListener('click', () => abrirModalDetalle(container, btn.dataset.id));
   });
 
-  const filtroProveedor = container.querySelector('#filtro-proveedor');
-  if (filtroProveedor) filtroProveedor.addEventListener('change', (e) => { estado.filtroProveedor = e.target.value; pintarContenido(container); });
-  const filtroDesde = container.querySelector('#filtro-desde');
-  if (filtroDesde) filtroDesde.addEventListener('change', (e) => { estado.filtroDesde = e.target.value; pintarContenido(container); });
-  const filtroHasta = container.querySelector('#filtro-hasta');
-  if (filtroHasta) filtroHasta.addEventListener('change', (e) => { estado.filtroHasta = e.target.value; pintarContenido(container); });
-
   const btnNuevo = container.querySelector('#btn-nuevo-pago');
-  if (btnNuevo) btnNuevo.addEventListener('click', () => { estado.editandoId = 'nuevo'; estado.mostrandoNuevoProveedor = false; pintarContenido(container); });
+  if (btnNuevo) btnNuevo.addEventListener('click', () => abrirModalCompra(container, 'nuevo'));
 
   const btnExportar = container.querySelector('#btn-exportar-pagos');
   if (btnExportar) btnExportar.addEventListener('click', exportarExcel);
 
   container.querySelectorAll('.btn-editar-pago').forEach((btn) => {
-    btn.addEventListener('click', () => { estado.editandoId = btn.dataset.id; pintarContenido(container); });
+    btn.addEventListener('click', () => abrirModalCompra(container, btn.dataset.id));
   });
   container.querySelectorAll('.btn-marcar-pagado').forEach((btn) => {
     btn.addEventListener('click', () => abrirModalGestionar(container, btn.dataset.id, null));
   });
-
-  const btnCancelarPago = container.querySelector('#btn-cancelar-pago');
-  if (btnCancelarPago) btnCancelarPago.addEventListener('click', () => { estado.editandoId = null; estado.mostrandoNuevoProveedor = false; pintarContenido(container); });
-
-  const selectProveedor = container.querySelector('#pago-proveedor');
-  if (selectProveedor) {
-    selectProveedor.addEventListener('change', (e) => {
-      const proveedor = estado.proveedoresActivos.find((pr) => pr.id === e.target.value);
-      const inputVendedor = container.querySelector('#pago-vendedor');
-      if (proveedor && inputVendedor) inputVendedor.value = proveedor.contacto || '';
-    });
-  }
-
-  const btnToggleNuevoProveedor = container.querySelector('#btn-toggle-nuevo-proveedor');
-  if (btnToggleNuevoProveedor) btnToggleNuevoProveedor.addEventListener('click', () => { estado.mostrandoNuevoProveedor = !estado.mostrandoNuevoProveedor; pintarContenido(container); });
-
-  const formNuevoProveedor = container.querySelector('#form-nuevo-proveedor');
-  if (formNuevoProveedor) formNuevoProveedor.addEventListener('submit', async (e) => { e.preventDefault(); await crearProveedorInline(container, formNuevoProveedor); });
-
-  const formPago = container.querySelector('#form-pago');
-  if (formPago) formPago.addEventListener('submit', async (e) => { e.preventDefault(); await guardarCompra(container, formPago); });
 }
 
 function sumarMeses(mesISO, delta) {
@@ -666,16 +606,16 @@ function sumarMeses(mesISO, delta) {
 
 // ============ ACCIONES ============
 
-async function crearProveedorInline(container, form) {
-  const nombre = form.querySelector('#nprov-nombre').value.trim();
-  const nit = form.querySelector('#nprov-nit').value.trim();
-  const contacto = form.querySelector('#nprov-contacto').value.trim();
-  const telefono = form.querySelector('#nprov-telefono').value.trim();
-  const correo = form.querySelector('#nprov-correo').value.trim();
-  const banco = form.querySelector('#nprov-banco').value.trim();
-  const tipo_cuenta = form.querySelector('#nprov-tipo-cuenta').value || null;
-  const numero_cuenta = form.querySelector('#nprov-numero-cuenta').value.trim();
-  const enlace_drive = form.querySelector('#nprov-enlace-drive').value.trim();
+async function crearProveedorInline(container, form, overlay, overlayPadre) {
+  const nombre = form.querySelector('.np-nombre').value.trim();
+  const nit = form.querySelector('.np-nit').value.trim();
+  const contacto = form.querySelector('.np-contacto').value.trim();
+  const telefono = form.querySelector('.np-telefono').value.trim();
+  const correo = form.querySelector('.np-correo').value.trim();
+  const banco = form.querySelector('.np-banco').value.trim();
+  const tipo_cuenta = form.querySelector('.np-tipo-cuenta').value || null;
+  const numero_cuenta = form.querySelector('.np-numero-cuenta').value.trim();
+  const enlace_drive = form.querySelector('.np-enlace-drive').value.trim();
 
   if (!nombre || !nit) {
     mostrarToast('Nombre y NIT son obligatorios.', 'error');
@@ -699,28 +639,33 @@ async function crearProveedorInline(container, form) {
 
   const { data: proveedores } = await supabase.from('proveedores').select('id, nombre, contacto').eq('activo', true).order('nombre', { ascending: true });
   estado.proveedoresActivos = proveedores || [];
-  estado.mostrandoNuevoProveedor = false;
-  pintarContenido(container);
 
-  const selectProveedor = container.querySelector('#pago-proveedor');
-  if (selectProveedor && data) {
-    selectProveedor.value = data.id;
-    const inputVendedor = container.querySelector('#pago-vendedor');
+  // Autoseleccionar el proveedor recién creado en el modal de compra (que sigue abierto detrás).
+  if (overlayPadre && data) {
+    const selectProveedor = overlayPadre.querySelector('.pg-proveedor');
+    if (selectProveedor) {
+      selectProveedor.innerHTML = `<option value="">— Seleccionar —</option>${estado.proveedoresActivos
+        .map((pr) => `<option value="${pr.id}" ${pr.id === data.id ? 'selected' : ''}>${pr.nombre}</option>`)
+        .join('')}`;
+    }
+    const inputVendedor = overlayPadre.querySelector('.pg-vendedor');
     if (inputVendedor) inputVendedor.value = data.contacto || '';
   }
+
+  overlay.remove();
 }
 
 async function guardarCompra(container, form) {
-  const proveedor_id = form.querySelector('#pago-proveedor').value;
-  const vendedor = form.querySelector('#pago-vendedor').value.trim();
-  const numero_factura = form.querySelector('#pago-factura').value.trim();
-  const fecha_compra = form.querySelector('#pago-fecha-compra').value;
-  const valor = parseCOP(form.querySelector('#pago-valor').value);
-  const fecha_vencimiento = form.querySelector('#pago-fecha-vencimiento').value;
+  const proveedor_id = form.querySelector('.pg-proveedor').value;
+  const vendedor = form.querySelector('.pg-vendedor').value.trim();
+  const numero_factura = form.querySelector('.pg-factura').value.trim();
+  const fecha_compra = form.querySelector('.pg-fecha-compra').value;
+  const valor = parseCOP(form.querySelector('.pg-valor').value);
+  const fecha_vencimiento = form.querySelector('.pg-fecha-vencimiento').value;
 
   if (!proveedor_id || !fecha_compra || !fecha_vencimiento || valor <= 0) {
     mostrarToast('Proveedor, fecha de compra, valor y fecha de vencimiento son obligatorios.', 'error');
-    return;
+    return false;
   }
 
   const payload = { proveedor_id, vendedor, numero_factura, fecha_compra, valor, fecha_vencimiento };
@@ -732,31 +677,33 @@ async function guardarCompra(container, form) {
   if (error) {
     console.error('Error guardando compra:', error);
     mostrarToast(`No se pudo guardar: ${error.message}`, 'error');
-    return;
+    return false;
   }
 
   mostrarToast('Guardado.', 'exito');
   estado.editandoId = null;
-  estado.mostrandoNuevoProveedor = false;
   await cargarYRenderizar(container);
+  return true;
 }
 
 async function confirmarPago(container, form, id) {
   const perfil = getPerfilActual();
   const fecha_pago = form.querySelector('.gm-fecha-pago').value;
   const valor_pagado = parseCOP(form.querySelector('.gm-valor-pagado').value);
-  const metodo_pago = form.querySelector('.gm-metodo-pago').value;
   const cuenta_id = form.querySelector('.gm-cuenta').value;
   const numero_comprobante = form.querySelector('.gm-comprobante').value.trim();
 
-  if (!fecha_pago || valor_pagado <= 0 || !metodo_pago || !cuenta_id) {
-    mostrarToast('Fecha de pago, valor pagado, método de pago y cuenta de origen son obligatorios.', 'error');
+  if (!fecha_pago || valor_pagado <= 0 || !cuenta_id) {
+    mostrarToast('Fecha de pago, valor pagado y cuenta de origen son obligatorios.', 'error');
     return false;
   }
 
+  const cuenta = estado.cuentasActivas.find((c) => c.id === cuenta_id);
+  const metodo_pago = metodoDesdeCuenta(cuenta);
+
   const confirmado = await mostrarConfirmacion({
     titulo: 'Confirmar pago',
-    contenidoHTML: `<p>¿Confirmas el pago de <strong>${formatCOP(valor_pagado)}</strong> por <strong>${etiquetaMetodo(metodo_pago)}</strong>? Esto va a descontar el saldo de la cuenta seleccionada.</p>`,
+    contenidoHTML: `<p>¿Confirmas el pago de <strong>${formatCOP(valor_pagado)}</strong> desde <strong>${cuenta?.nombre || ''}</strong>? Esto va a descontar ese saldo en Saldos y Cuentas.</p>`,
     textoConfirmar: 'Sí, confirmar',
   });
   if (!confirmado) return false;
@@ -783,7 +730,7 @@ async function confirmarPago(container, form, id) {
 async function exportarExcel() {
   try {
     const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
-    const filas = registrosFiltrados().map((p) => ({
+    const filas = filasDelDia().map((p) => ({
       Proveedor: p.proveedores?.nombre || '',
       Vendedor: p.vendedor || '',
       'N° Factura': p.numero_factura || '',
@@ -799,7 +746,7 @@ async function exportarExcel() {
     const hoja = XLSX.utils.json_to_sheet(filas);
     const libro = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(libro, hoja, 'Agenda de Pagos');
-    XLSX.writeFile(libro, 'agenda-pagos-servicentro-bb.xlsx');
+    XLSX.writeFile(libro, `agenda-pagos-${estado.diaSeleccionado}.xlsx`);
   } catch (err) {
     console.error('Error exportando Excel:', err);
     mostrarToast('No se pudo exportar a Excel.', 'error');
