@@ -37,6 +37,7 @@ const ESTADOS_FILTRO = [
 const estado = {
   registros: [],
   proveedoresActivos: [],
+  cuentasActivas: [],
   filtroProveedor: '',
   filtroEstado: '',
   filtroDesde: '',
@@ -74,9 +75,14 @@ async function cargarYRenderizar(container) {
   const contenido = container.querySelector('#agenda-pagos-contenido');
   contenido.innerHTML = '<p class="mensaje-vacio">Cargando…</p>';
 
-  const [{ data: registros, error: errorRegistros }, { data: proveedores, error: errorProveedores }] = await Promise.all([
+  const [
+    { data: registros, error: errorRegistros },
+    { data: proveedores, error: errorProveedores },
+    { data: cuentas, error: errorCuentas },
+  ] = await Promise.all([
     supabase.from('proveedores_pagos').select('*, proveedores(nombre)').order('fecha_vencimiento', { ascending: true }),
     supabase.from('proveedores').select('id, nombre').eq('activo', true).order('nombre', { ascending: true }),
+    supabase.from('cuentas').select('id, nombre').eq('activa', true).order('nombre', { ascending: true }),
   ]);
 
   if (errorRegistros) {
@@ -85,9 +91,11 @@ async function cargarYRenderizar(container) {
     return;
   }
   if (errorProveedores) console.error('Error cargando proveedores activos:', errorProveedores);
+  if (errorCuentas) console.error('Error cargando cuentas activas:', errorCuentas);
 
   estado.registros = registros || [];
   estado.proveedoresActivos = proveedores || [];
+  estado.cuentasActivas = cuentas || [];
   pintarContenido(container);
 }
 
@@ -297,6 +305,13 @@ function renderFormularioGestionar() {
             ${METODOS_PAGO.map((m) => `<option value="${m.value}">${m.label}</option>`).join('')}
           </select>
         </label>
+        <label>
+          Cuenta de origen *
+          <select id="gestion-cuenta" required>
+            <option value="">— Seleccionar —</option>
+            ${estado.cuentasActivas.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join('')}
+          </select>
+        </label>
         <label>Número de comprobante <input type="text" id="gestion-comprobante" /></label>
       </form>
       <div class="acciones-tarjeta">
@@ -432,16 +447,17 @@ async function confirmarPago(container, form) {
   const fecha_pago = form.querySelector('#gestion-fecha-pago').value;
   const valor_pagado = parseCOP(form.querySelector('#gestion-valor-pagado').value);
   const metodo_pago = form.querySelector('#gestion-metodo-pago').value;
+  const cuenta_id = form.querySelector('#gestion-cuenta').value;
   const numero_comprobante = form.querySelector('#gestion-comprobante').value.trim();
 
-  if (!fecha_pago || valor_pagado <= 0 || !metodo_pago) {
-    mostrarToast('Fecha de pago, valor pagado y método de pago son obligatorios.', 'error');
+  if (!fecha_pago || valor_pagado <= 0 || !metodo_pago || !cuenta_id) {
+    mostrarToast('Fecha de pago, valor pagado, método de pago y cuenta de origen son obligatorios.', 'error');
     return;
   }
 
   const confirmado = await mostrarConfirmacion({
     titulo: 'Confirmar pago',
-    contenidoHTML: `<p>¿Confirmas el pago de <strong>${formatCOP(valor_pagado)}</strong> por <strong>${etiquetaMetodo(metodo_pago)}</strong>?</p>`,
+    contenidoHTML: `<p>¿Confirmas el pago de <strong>${formatCOP(valor_pagado)}</strong> por <strong>${etiquetaMetodo(metodo_pago)}</strong>? Esto va a descontar el saldo de la cuenta seleccionada.</p>`,
     textoConfirmar: 'Sí, confirmar',
   });
   if (!confirmado) return;
@@ -453,6 +469,7 @@ async function confirmarPago(container, form) {
       fecha_pago,
       valor_pagado,
       metodo_pago,
+      cuenta_id,
       numero_comprobante,
       gestionado_por: perfil?.id,
       gestionado_at: new Date().toISOString(),
