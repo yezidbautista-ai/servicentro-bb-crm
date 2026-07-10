@@ -2,15 +2,14 @@
 //
 // Módulo 4 — Pagos y Agenda de Pagos a Proveedores.
 //
-// Dos vistas: Lista (filtros + tabla, como antes) y Calendario (semáforo
-// diario: verde = todo pagado ese día, naranja = pendiente, rojo = vencido).
-// Al hacer clic en un día del calendario se ve el detalle y se puede pagar
-// desde ahí mismo.
+// Layout inspirado en la Agenda de Facturación de Satlock Fleet: barra
+// lateral (mini-calendario + filtro por estado + resumen del mes) y panel
+// principal con el día seleccionado mostrando tarjetas de cada pago, o una
+// tabla completa filtrable para trabajo más a fondo.
 //
 // Cada registro de compra/cuenta por pagar referencia un proveedor por FK.
-// Desde aquí también se puede crear un proveedor nuevo sin salir del módulo
-// (mismos campos que en Proveedores). Al elegir un proveedor en el
-// formulario de compra, el campo Vendedor se autocompleta con su contacto.
+// Desde aquí también se puede crear un proveedor nuevo sin salir del módulo.
+// Al elegir un proveedor, el campo Vendedor se autocompleta con su contacto.
 //
 // Al marcar un pago como realizado se captura método de pago + cuenta de
 // origen — de ahí se alimentan automáticamente la tarjeta "Pagos Diarios"
@@ -34,14 +33,12 @@ const METODOS_PAGO = [
 ];
 
 const ESTADOS_FILTRO = [
-  { value: '', label: 'Todos los estados' },
-  { value: 'pendiente', label: 'Pendiente' },
-  { value: 'vencido', label: 'Vencido' },
-  { value: 'pagado', label: 'Pagado' },
+  { value: '', label: 'Todos', color: 'gris' },
+  { value: 'pendiente', label: 'Pendiente', color: 'naranja' },
+  { value: 'vencido', label: 'Vencido', color: 'rojo' },
+  { value: 'pagado', label: 'Pagado', color: 'verde' },
 ];
 
-// Duplicado intencional (solo 2 valores fijos, igual que en proveedores.js) —
-// no amerita un helper compartido en core/ para algo tan pequeño.
 const TIPOS_CUENTA = [
   { value: 'ahorros', label: 'Ahorros' },
   { value: 'corriente', label: 'Corriente' },
@@ -57,38 +54,43 @@ const estado = {
   filtroEstado: '',
   filtroDesde: '',
   filtroHasta: '',
+  busquedaDia: '',
   editandoId: null,
   gestionandoId: null,
   mostrandoNuevoProveedor: false,
-  vista: 'lista', // 'lista' | 'calendario'
-  mesCalendario: hoyISO().slice(0, 7), // YYYY-MM
-  diaSeleccionado: null,
+  vistaPrincipal: 'dia', // 'dia' | 'tabla'
+  mesCalendario: hoyISO().slice(0, 7),
+  diaSeleccionado: hoyISO(),
   detalleId: null,
 };
 
 function etiquetaMetodo(valor) {
   return METODOS_PAGO.find((m) => m.value === valor)?.label || valor || '—';
 }
-
 function etiquetaTipoCuenta(valor) {
   return TIPOS_CUENTA.find((t) => t.value === valor)?.label || valor || '—';
 }
-
 function estadoReal(p) {
   if (p.estado === 'pendiente' && p.fecha_vencimiento < hoyISO()) return 'vencido';
   return p.estado;
 }
-
 function etiquetaEstado(er) {
   return { pendiente: 'Pendiente', vencido: 'Vencido', pagado: 'Pagado' }[er] || er;
+}
+function nombreDiaLargo(fechaISO) {
+  const [a, m, d] = fechaISO.split('-').map(Number);
+  const fecha = new Date(a, m - 1, d);
+  const texto = fecha.toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
 }
 
 async function render(container) {
   estado.editandoId = null;
   estado.gestionandoId = null;
   estado.mostrandoNuevoProveedor = false;
-  estado.diaSeleccionado = null;
   estado.detalleId = null;
+  estado.diaSeleccionado = hoyISO();
+  estado.mesCalendario = hoyISO().slice(0, 7);
 
   container.innerHTML = `
     <h2>Agenda de Pagos</h2>
@@ -140,8 +142,17 @@ function pintarContenido(container) {
   const contenido = container.querySelector('#agenda-pagos-contenido');
 
   contenido.innerHTML = `
-    ${renderSelectorVista()}
-    ${estado.vista === 'calendario' ? renderVistaCalendario() : renderVistaLista()}
+    <div class="agenda-layout">
+      <aside class="agenda-sidebar">
+        ${renderMiniCalendario()}
+        ${renderFiltroSidebar()}
+        ${renderResumenMes()}
+      </aside>
+      <div class="agenda-principal">
+        ${renderSelectorVistaPrincipal()}
+        ${estado.vistaPrincipal === 'tabla' ? renderVistaTabla() : renderVistaDia()}
+      </div>
+    </div>
     ${estado.editandoId !== null ? renderFormularioCompra() : ''}
     ${estado.gestionandoId !== null ? renderFormularioGestionar() : ''}
   `;
@@ -150,237 +161,173 @@ function pintarContenido(container) {
   container.querySelectorAll('.input-moneda input').forEach(activarInputMoneda);
 }
 
-function renderSelectorVista() {
-  return `
-    <div class="selector-vista">
-      <button type="button" class="tab-item ${estado.vista === 'lista' ? 'activo' : ''}" id="btn-vista-lista">📋 Lista</button>
-      <button type="button" class="tab-item ${estado.vista === 'calendario' ? 'activo' : ''}" id="btn-vista-calendario">📆 Calendario</button>
-    </div>
-  `;
-}
+// ============ BARRA LATERAL ============
 
-// ============ VISTA LISTA ============
-
-function renderVistaLista() {
-  return `
-    ${renderAgendaProximos()}
-    ${renderFiltrosYTabla()}
-  `;
-}
-
-function renderAgendaProximos() {
-  const hoy = hoyISO();
-  const en7Dias = new Date();
-  en7Dias.setDate(en7Dias.getDate() + 7);
-  const en7DiasISO = en7Dias.toISOString().slice(0, 10);
-
-  const proximos = estado.registros
-    .filter((p) => estadoReal(p) !== 'pagado' && p.fecha_vencimiento <= en7DiasISO)
-    .sort((a, b) => a.fecha_vencimiento.localeCompare(b.fecha_vencimiento));
-
-  return `
-    <section class="tarjeta">
-      <h3>Agenda — vencimientos de hoy y los próximos 7 días</h3>
-      ${
-        proximos.length === 0
-          ? '<p class="mensaje-vacio">No hay vencimientos próximos. Todo despejado.</p>'
-          : `
-        <table class="tabla-simple">
-          <thead><tr><th>Vence</th><th>Proveedor</th><th>Valor</th><th>Estado</th></tr></thead>
-          <tbody>
-            ${proximos
-              .map(
-                (p) => `
-              <tr>
-                <td>${p.fecha_vencimiento}${p.fecha_vencimiento === hoy ? ' (hoy)' : ''}</td>
-                <td>${p.proveedores?.nombre || '—'}</td>
-                <td class="monto">${formatCOP(p.valor)}</td>
-                <td><span class="badge badge-${estadoReal(p)}">${etiquetaEstado(estadoReal(p))}</span></td>
-              </tr>`
-              )
-              .join('')}
-          </tbody>
-        </table>
-      `
-      }
-    </section>
-  `;
-}
-
-function renderFiltrosYTabla() {
-  const lista = registrosFiltrados();
-
-  return `
-    <section class="tarjeta">
-      <div class="controles-fecha">
-        <label>
-          Proveedor
-          <select id="filtro-proveedor">
-            <option value="">Todos</option>
-            ${estado.proveedoresActivos
-              .map((p) => `<option value="${p.id}" ${estado.filtroProveedor === p.id ? 'selected' : ''}>${p.nombre}</option>`)
-              .join('')}
-          </select>
-        </label>
-        <label>
-          Estado
-          <select id="filtro-estado">
-            ${ESTADOS_FILTRO.map((e) => `<option value="${e.value}" ${estado.filtroEstado === e.value ? 'selected' : ''}>${e.label}</option>`).join('')}
-          </select>
-        </label>
-        <label>Vence desde <input type="date" id="filtro-desde" value="${estado.filtroDesde}" /></label>
-        <label>Vence hasta <input type="date" id="filtro-hasta" value="${estado.filtroHasta}" /></label>
-      </div>
-
-      <div class="tabla-scroll">
-        <table class="tabla-simple">
-          <thead>
-            <tr>
-              <th>Proveedor</th>
-              <th>Vendedor</th>
-              <th>Factura</th>
-              <th>Fecha compra</th>
-              <th>Valor</th>
-              <th>Vence</th>
-              <th>Estado</th>
-              <th>Fecha pago</th>
-              <th>Valor pagado</th>
-              <th>Comprobante</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            ${
-              lista.length
-                ? lista.map((p) => renderFilaRegistro(p)).join('')
-                : '<tr><td colspan="11" class="mensaje-vacio">Sin registros con estos filtros.</td></tr>'
-            }
-          </tbody>
-        </table>
-      </div>
-
-      <div class="acciones-tarjeta">
-        <button type="button" id="btn-nuevo-pago" class="btn btn-primario">+ Nueva compra / cuenta por pagar</button>
-        <button type="button" id="btn-exportar-pagos" class="btn btn-exportar">Exportar Excel</button>
-      </div>
-    </section>
-  `;
-}
-
-function renderFilaRegistro(p) {
-  const real = estadoReal(p);
-  return `
-    <tr>
-      <td>${p.proveedores?.nombre || '—'}</td>
-      <td>${p.vendedor || '—'}</td>
-      <td>${p.numero_factura || '—'}</td>
-      <td>${p.fecha_compra}</td>
-      <td class="monto">${formatCOP(p.valor)}</td>
-      <td>${p.fecha_vencimiento}</td>
-      <td><span class="badge badge-${real}">${etiquetaEstado(real)}</span></td>
-      <td>${p.fecha_pago || '—'}</td>
-      <td class="monto">${p.valor_pagado ? formatCOP(p.valor_pagado) : '—'}</td>
-      <td>${p.numero_comprobante || '—'}</td>
-      <td>
-        ${real !== 'pagado' ? `<button type="button" class="btn-editar-salida btn-marcar-pagado" data-id="${p.id}">Marcar pagado</button>` : ''}
-        <button type="button" class="btn-editar-salida btn-editar-pago" data-id="${p.id}">Editar</button>
-      </td>
-    </tr>
-  `;
-}
-
-// ============ VISTA CALENDARIO ============
-
-function renderVistaCalendario() {
+function renderMiniCalendario() {
   const [anioStr, mesStr] = estado.mesCalendario.split('-');
   const anio = Number(anioStr);
-  const mes = Number(mesStr); // 1-12
-
+  const mes = Number(mesStr);
   const primerDiaMes = new Date(anio, mes - 1, 1);
-  const ultimoDiaMes = new Date(anio, mes, 0);
-  const totalDias = ultimoDiaMes.getDate();
-  // getDay(): 0=domingo..6=sábado. Queremos que la semana empiece en lunes.
+  const totalDias = new Date(anio, mes, 0).getDate();
   const offset = (primerDiaMes.getDay() + 6) % 7;
-
-  const nombreMes = primerDiaMes.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
+  const nombreMesTitulo = primerDiaMes.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
 
   const celdas = [];
-  for (let i = 0; i < offset; i++) celdas.push('<div class="celda-dia celda-vacia"></div>');
+  for (let i = 0; i < offset; i++) celdas.push('<div class="celda-dia celda-mini celda-vacia"></div>');
 
   for (let dia = 1; dia <= totalDias; dia++) {
     const fechaISO = `${anioStr}-${mesStr}-${String(dia).padStart(2, '0')}`;
     const delDia = estado.registros.filter((p) => p.fecha_vencimiento === fechaISO);
-    let colorSemaforo = '';
+    let color = '';
     if (delDia.length > 0) {
-      if (delDia.some((p) => estadoReal(p) === 'vencido')) colorSemaforo = 'semaforo-rojo';
-      else if (delDia.some((p) => estadoReal(p) === 'pendiente')) colorSemaforo = 'semaforo-naranja';
-      else colorSemaforo = 'semaforo-verde';
+      if (delDia.some((p) => estadoReal(p) === 'vencido')) color = 'semaforo-rojo';
+      else if (delDia.some((p) => estadoReal(p) === 'pendiente')) color = 'semaforo-naranja';
+      else color = 'semaforo-verde';
     }
     const esHoy = fechaISO === hoyISO();
     const seleccionado = fechaISO === estado.diaSeleccionado;
     celdas.push(`
-      <button type="button" class="celda-dia ${esHoy ? 'celda-hoy' : ''} ${seleccionado ? 'celda-seleccionada' : ''}" data-fecha="${fechaISO}">
+      <button type="button" class="celda-dia celda-mini ${esHoy ? 'celda-hoy' : ''} ${seleccionado ? 'celda-seleccionada' : ''}" data-fecha="${fechaISO}">
         <span class="numero-dia">${dia}</span>
-        ${colorSemaforo ? `<span class="semaforo ${colorSemaforo}"></span>` : ''}
+        ${color ? `<span class="semaforo ${color}"></span>` : ''}
       </button>
     `);
   }
 
-  const tituloMes = nombreMes.charAt(0).toUpperCase() + nombreMes.slice(1);
+  const titulo = nombreMesTitulo.charAt(0).toUpperCase() + nombreMesTitulo.slice(1);
 
   return `
     <section class="tarjeta">
+      <h3>Calendario</h3>
       <div class="calendario-header">
-        <button type="button" id="btn-mes-anterior" class="btn-editar">‹ Anterior</button>
-        <h3>${tituloMes}</h3>
-        <button type="button" id="btn-mes-siguiente" class="btn-editar">Siguiente ›</button>
+        <button type="button" id="btn-mes-anterior" class="btn-editar">‹</button>
+        <strong>${titulo}</strong>
+        <button type="button" id="btn-mes-siguiente" class="btn-editar">›</button>
       </div>
-      <div class="calendario-leyenda">
-        <span><span class="semaforo semaforo-verde"></span> Pagado</span>
-        <span><span class="semaforo semaforo-naranja"></span> Por pagar</span>
-        <span><span class="semaforo semaforo-rojo"></span> Vencido</span>
+      <div class="calendario-grid calendario-mini-grid calendario-dias-semana">
+        ${DIAS_SEMANA.map((d) => `<div class="celda-dia-semana">${d[0]}</div>`).join('')}
       </div>
-      <div class="calendario-grid calendario-dias-semana">
-        ${DIAS_SEMANA.map((d) => `<div class="celda-dia-semana">${d}</div>`).join('')}
-      </div>
-      <div class="calendario-grid">${celdas.join('')}</div>
+      <div class="calendario-grid calendario-mini-grid">${celdas.join('')}</div>
     </section>
-    ${estado.diaSeleccionado ? renderDetalleDia() : ''}
   `;
 }
 
-function renderDetalleDia() {
-  const delDia = estado.registros
-    .filter((p) => p.fecha_vencimiento === estado.diaSeleccionado)
-    .sort((a, b) => (a.proveedores?.nombre || '').localeCompare(b.proveedores?.nombre || ''));
+function renderFiltroSidebar() {
+  return `
+    <section class="tarjeta">
+      <h3>Filtrar por estado</h3>
+      <div class="filtro-lista">
+        ${ESTADOS_FILTRO.map(
+          (e) => `
+          <button type="button" class="filtro-item ${estado.filtroEstado === e.value ? 'activo' : ''}" data-valor="${e.value}">
+            <span class="semaforo semaforo-${e.color}"></span> ${e.label}
+          </button>`
+        ).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function renderResumenMes() {
+  const delMes = estado.registros.filter((p) => p.fecha_vencimiento.slice(0, 7) === estado.mesCalendario);
+  const pagados = delMes.filter((p) => estadoReal(p) === 'pagado');
+  const pendientes = delMes.filter((p) => estadoReal(p) !== 'pagado');
+  const valorPendiente = pendientes.reduce((acc, p) => acc + Number(p.valor || 0), 0);
 
   return `
     <section class="tarjeta">
-      <h3>Pagos del ${estado.diaSeleccionado}</h3>
+      <h3>Resumen del mes</h3>
+      <div class="resumen-grid">
+        <div class="resumen-card">
+          <div class="resumen-valor">${delMes.length}</div>
+          <div class="resumen-etiqueta">Total mes</div>
+        </div>
+        <div class="resumen-card">
+          <div class="resumen-valor" style="color:var(--color-verde)">${pagados.length}</div>
+          <div class="resumen-etiqueta">Pagados</div>
+        </div>
+        <div class="resumen-card">
+          <div class="resumen-valor" style="color:var(--color-pendiente)">${pendientes.length}</div>
+          <div class="resumen-etiqueta">Pendientes</div>
+        </div>
+        <div class="resumen-card">
+          <div class="resumen-valor monto">${formatCOP(valorPendiente)}</div>
+          <div class="resumen-etiqueta">Valor pendiente</div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+// ============ PANEL PRINCIPAL ============
+
+function renderSelectorVistaPrincipal() {
+  return `
+    <div class="agenda-principal-header">
+      <div class="selector-vista">
+        <button type="button" class="tab-item ${estado.vistaPrincipal === 'dia' ? 'activo' : ''}" id="btn-vista-dia">Día seleccionado</button>
+        <button type="button" class="tab-item ${estado.vistaPrincipal === 'tabla' ? 'activo' : ''}" id="btn-vista-tabla">Tabla completa</button>
+      </div>
+      <div class="agenda-principal-acciones">
+        <button type="button" id="btn-nuevo-pago" class="btn btn-primario">+ Nueva compra</button>
+        <button type="button" id="btn-exportar-pagos" class="btn btn-exportar">Exportar Excel</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderVistaDia() {
+  const fecha = estado.diaSeleccionado || hoyISO();
+  const busqueda = estado.busquedaDia.trim().toLowerCase();
+
+  const delDia = estado.registros
+    .filter((p) => p.fecha_vencimiento === fecha)
+    .filter((p) => (estado.filtroEstado ? estadoReal(p) === estado.filtroEstado : true))
+    .filter((p) => {
+      if (!busqueda) return true;
+      const texto = `${p.proveedores?.nombre || ''} ${p.vendedor || ''} ${p.numero_factura || ''}`.toLowerCase();
+      return texto.includes(busqueda);
+    })
+    .sort((a, b) => (a.proveedores?.nombre || '').localeCompare(b.proveedores?.nombre || ''));
+
+  const pendientesDelDia = delDia.filter((p) => estadoReal(p) !== 'pagado').length;
+
+  return `
+    <section class="tarjeta">
+      <div class="agenda-dia-titulo">
+        <h3>${nombreDiaLargo(fecha)}</h3>
+        <span class="mensaje-vacio">${delDia.length} pago(s) · ${pendientesDelDia} pendiente(s)</span>
+      </div>
+      <input type="text" id="busqueda-dia" placeholder="Buscar por proveedor, vendedor o factura…" value="${estado.busquedaDia}" class="input-busqueda" />
+
       ${
         delDia.length === 0
-          ? '<p class="mensaje-vacio">No hay pagos programados este día.</p>'
-          : `
-        <table class="tabla-simple">
-          <thead><tr><th>Proveedor</th><th>Valor</th><th>Estado</th><th></th></tr></thead>
-          <tbody>
-            ${delDia
-              .map(
-                (p) => `
-              <tr>
-                <td>${p.proveedores?.nombre || '—'}</td>
-                <td class="monto">${formatCOP(p.valor)}</td>
-                <td><span class="badge badge-${estadoReal(p)}">${etiquetaEstado(estadoReal(p))}</span></td>
-                <td><button type="button" class="btn-editar-salida btn-ver-detalle" data-id="${p.id}">Ver detalle</button></td>
-              </tr>`
-              )
-              .join('')}
-          </tbody>
-        </table>
-      `
+          ? '<p class="mensaje-vacio" style="margin-top:1rem;">No hay pagos para este día con los filtros actuales.</p>'
+          : `<div class="lista-tarjetas-pago">${delDia.map((p) => renderTarjetaPagoDia(p)).join('')}</div>`
       }
-      ${estado.detalleId ? renderTarjetaDetalle() : ''}
     </section>
+    ${estado.detalleId ? renderTarjetaDetalle() : ''}
+  `;
+}
+
+function renderTarjetaPagoDia(p) {
+  const real = estadoReal(p);
+  return `
+    <div class="tarjeta-pago tarjeta-pago-${real}">
+      <div class="tarjeta-pago-fila">
+        <strong>${p.proveedores?.nombre || '—'}</strong>
+        <span class="monto">${formatCOP(p.valor)}</span>
+      </div>
+      <div class="tarjeta-pago-badges">
+        <span class="badge badge-${real}">${etiquetaEstado(real)}</span>
+        ${p.vendedor ? `<span class="chip">${p.vendedor}</span>` : ''}
+        ${p.numero_factura ? `<span class="chip">Factura ${p.numero_factura}</span>` : ''}
+      </div>
+      <div class="tarjeta-pago-acciones">
+        <button type="button" class="btn-editar-salida btn-ver-detalle" data-id="${p.id}">Ver detalle</button>
+        ${real !== 'pagado' ? `<button type="button" class="btn btn-primario btn-chico btn-marcar-pagado" data-id="${p.id}">✓ Marcar pagada</button>` : ''}
+      </div>
+    </div>
   `;
 }
 
@@ -410,13 +357,76 @@ function renderTarjetaDetalle() {
       }
       <div class="acciones-tarjeta">
         ${real !== 'pagado' ? `<button type="button" class="btn btn-primario btn-marcar-pagado" data-id="${p.id}">Pagar</button>` : ''}
+        <button type="button" class="btn-editar-salida btn-editar-pago" data-id="${p.id}">Editar</button>
         <button type="button" id="btn-cerrar-detalle" class="btn btn-secundario">Cerrar</button>
       </div>
     </div>
   `;
 }
 
-// ============ FORMULARIO NUEVA COMPRA (+ crear proveedor inline) ============
+function renderVistaTabla() {
+  const lista = registrosFiltrados();
+
+  return `
+    <section class="tarjeta">
+      <div class="controles-fecha">
+        <label>
+          Proveedor
+          <select id="filtro-proveedor">
+            <option value="">Todos</option>
+            ${estado.proveedoresActivos
+              .map((p) => `<option value="${p.id}" ${estado.filtroProveedor === p.id ? 'selected' : ''}>${p.nombre}</option>`)
+              .join('')}
+          </select>
+        </label>
+        <label>Vence desde <input type="date" id="filtro-desde" value="${estado.filtroDesde}" /></label>
+        <label>Vence hasta <input type="date" id="filtro-hasta" value="${estado.filtroHasta}" /></label>
+      </div>
+
+      <div class="tabla-scroll">
+        <table class="tabla-simple">
+          <thead>
+            <tr>
+              <th>Proveedor</th><th>Vendedor</th><th>Factura</th><th>Fecha compra</th><th>Valor</th>
+              <th>Vence</th><th>Estado</th><th>Fecha pago</th><th>Valor pagado</th><th>Comprobante</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              lista.length
+                ? lista.map((p) => renderFilaRegistro(p)).join('')
+                : '<tr><td colspan="11" class="mensaje-vacio">Sin registros con estos filtros.</td></tr>'
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function renderFilaRegistro(p) {
+  const real = estadoReal(p);
+  return `
+    <tr>
+      <td>${p.proveedores?.nombre || '—'}</td>
+      <td>${p.vendedor || '—'}</td>
+      <td>${p.numero_factura || '—'}</td>
+      <td>${p.fecha_compra}</td>
+      <td class="monto">${formatCOP(p.valor)}</td>
+      <td>${p.fecha_vencimiento}</td>
+      <td><span class="badge badge-${real}">${etiquetaEstado(real)}</span></td>
+      <td>${p.fecha_pago || '—'}</td>
+      <td class="monto">${p.valor_pagado ? formatCOP(p.valor_pagado) : '—'}</td>
+      <td>${p.numero_comprobante || '—'}</td>
+      <td>
+        ${real !== 'pagado' ? `<button type="button" class="btn-editar-salida btn-marcar-pagado" data-id="${p.id}">Marcar pagado</button>` : ''}
+        <button type="button" class="btn-editar-salida btn-editar-pago" data-id="${p.id}">Editar</button>
+      </td>
+    </tr>
+  `;
+}
+
+// ============ FORMULARIOS (compra, nuevo proveedor, gestionar pago) ============
 
 function renderFormularioCompra() {
   const editando = estado.editandoId !== 'nuevo';
@@ -528,135 +538,73 @@ function renderFormularioGestionar() {
 // ============ EVENTOS ============
 
 function enlazarEventos(container) {
-  const btnVistaLista = container.querySelector('#btn-vista-lista');
-  if (btnVistaLista) {
-    btnVistaLista.addEventListener('click', () => {
-      estado.vista = 'lista';
-      pintarContenido(container);
-    });
-  }
-  const btnVistaCalendario = container.querySelector('#btn-vista-calendario');
-  if (btnVistaCalendario) {
-    btnVistaCalendario.addEventListener('click', () => {
-      estado.vista = 'calendario';
-      pintarContenido(container);
-    });
-  }
-
-  // --- Calendario ---
   const btnMesAnterior = container.querySelector('#btn-mes-anterior');
-  if (btnMesAnterior) {
-    btnMesAnterior.addEventListener('click', () => {
-      estado.mesCalendario = sumarMeses(estado.mesCalendario, -1);
-      estado.diaSeleccionado = null;
-      estado.detalleId = null;
-      pintarContenido(container);
-    });
-  }
+  if (btnMesAnterior) btnMesAnterior.addEventListener('click', () => { estado.mesCalendario = sumarMeses(estado.mesCalendario, -1); pintarContenido(container); });
   const btnMesSiguiente = container.querySelector('#btn-mes-siguiente');
-  if (btnMesSiguiente) {
-    btnMesSiguiente.addEventListener('click', () => {
-      estado.mesCalendario = sumarMeses(estado.mesCalendario, 1);
-      estado.diaSeleccionado = null;
-      estado.detalleId = null;
-      pintarContenido(container);
-    });
-  }
+  if (btnMesSiguiente) btnMesSiguiente.addEventListener('click', () => { estado.mesCalendario = sumarMeses(estado.mesCalendario, 1); pintarContenido(container); });
+
   container.querySelectorAll('.celda-dia:not(.celda-vacia)').forEach((btn) => {
     btn.addEventListener('click', () => {
       estado.diaSeleccionado = btn.dataset.fecha;
       estado.detalleId = null;
+      estado.vistaPrincipal = 'dia';
       pintarContenido(container);
     });
   });
-  container.querySelectorAll('.btn-ver-detalle').forEach((btn) => {
+
+  container.querySelectorAll('.filtro-item').forEach((btn) => {
     btn.addEventListener('click', () => {
-      estado.detalleId = btn.dataset.id;
+      estado.filtroEstado = btn.dataset.valor;
       pintarContenido(container);
     });
+  });
+
+  const btnVistaDia = container.querySelector('#btn-vista-dia');
+  if (btnVistaDia) btnVistaDia.addEventListener('click', () => { estado.vistaPrincipal = 'dia'; pintarContenido(container); });
+  const btnVistaTabla = container.querySelector('#btn-vista-tabla');
+  if (btnVistaTabla) btnVistaTabla.addEventListener('click', () => { estado.vistaPrincipal = 'tabla'; pintarContenido(container); });
+
+  const busquedaDia = container.querySelector('#busqueda-dia');
+  if (busquedaDia) {
+    busquedaDia.addEventListener('input', (e) => {
+      estado.busquedaDia = e.target.value;
+      pintarContenido(container);
+      const nuevo = container.querySelector('#busqueda-dia');
+      if (nuevo) { nuevo.focus(); nuevo.setSelectionRange(nuevo.value.length, nuevo.value.length); }
+    });
+  }
+
+  container.querySelectorAll('.btn-ver-detalle').forEach((btn) => {
+    btn.addEventListener('click', () => { estado.detalleId = btn.dataset.id; pintarContenido(container); });
   });
   const btnCerrarDetalle = container.querySelector('#btn-cerrar-detalle');
-  if (btnCerrarDetalle) {
-    btnCerrarDetalle.addEventListener('click', () => {
-      estado.detalleId = null;
-      pintarContenido(container);
-    });
-  }
+  if (btnCerrarDetalle) btnCerrarDetalle.addEventListener('click', () => { estado.detalleId = null; pintarContenido(container); });
 
-  // --- Filtros vista lista ---
   const filtroProveedor = container.querySelector('#filtro-proveedor');
-  if (filtroProveedor) {
-    filtroProveedor.addEventListener('change', (e) => {
-      estado.filtroProveedor = e.target.value;
-      pintarContenido(container);
-    });
-  }
-  const filtroEstado = container.querySelector('#filtro-estado');
-  if (filtroEstado) {
-    filtroEstado.addEventListener('change', (e) => {
-      estado.filtroEstado = e.target.value;
-      pintarContenido(container);
-    });
-  }
+  if (filtroProveedor) filtroProveedor.addEventListener('change', (e) => { estado.filtroProveedor = e.target.value; pintarContenido(container); });
   const filtroDesde = container.querySelector('#filtro-desde');
-  if (filtroDesde) {
-    filtroDesde.addEventListener('change', (e) => {
-      estado.filtroDesde = e.target.value;
-      pintarContenido(container);
-    });
-  }
+  if (filtroDesde) filtroDesde.addEventListener('change', (e) => { estado.filtroDesde = e.target.value; pintarContenido(container); });
   const filtroHasta = container.querySelector('#filtro-hasta');
-  if (filtroHasta) {
-    filtroHasta.addEventListener('change', (e) => {
-      estado.filtroHasta = e.target.value;
-      pintarContenido(container);
-    });
-  }
+  if (filtroHasta) filtroHasta.addEventListener('change', (e) => { estado.filtroHasta = e.target.value; pintarContenido(container); });
 
   const btnNuevo = container.querySelector('#btn-nuevo-pago');
-  if (btnNuevo) {
-    btnNuevo.addEventListener('click', () => {
-      estado.editandoId = 'nuevo';
-      estado.mostrandoNuevoProveedor = false;
-      pintarContenido(container);
-    });
-  }
+  if (btnNuevo) btnNuevo.addEventListener('click', () => { estado.editandoId = 'nuevo'; estado.mostrandoNuevoProveedor = false; pintarContenido(container); });
 
   const btnExportar = container.querySelector('#btn-exportar-pagos');
   if (btnExportar) btnExportar.addEventListener('click', exportarExcel);
 
   container.querySelectorAll('.btn-editar-pago').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      estado.editandoId = btn.dataset.id;
-      pintarContenido(container);
-    });
+    btn.addEventListener('click', () => { estado.editandoId = btn.dataset.id; pintarContenido(container); });
   });
-
   container.querySelectorAll('.btn-marcar-pagado').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      estado.gestionandoId = btn.dataset.id;
-      pintarContenido(container);
-    });
+    btn.addEventListener('click', () => { estado.gestionandoId = btn.dataset.id; pintarContenido(container); });
   });
 
   const btnCancelarPago = container.querySelector('#btn-cancelar-pago');
-  if (btnCancelarPago) {
-    btnCancelarPago.addEventListener('click', () => {
-      estado.editandoId = null;
-      estado.mostrandoNuevoProveedor = false;
-      pintarContenido(container);
-    });
-  }
-
+  if (btnCancelarPago) btnCancelarPago.addEventListener('click', () => { estado.editandoId = null; estado.mostrandoNuevoProveedor = false; pintarContenido(container); });
   const btnCancelarGestion = container.querySelector('#btn-cancelar-gestion');
-  if (btnCancelarGestion) {
-    btnCancelarGestion.addEventListener('click', () => {
-      estado.gestionandoId = null;
-      pintarContenido(container);
-    });
-  }
+  if (btnCancelarGestion) btnCancelarGestion.addEventListener('click', () => { estado.gestionandoId = null; pintarContenido(container); });
 
-  // --- Autocompletar Vendedor con el contacto del proveedor ---
   const selectProveedor = container.querySelector('#pago-proveedor');
   if (selectProveedor) {
     selectProveedor.addEventListener('change', (e) => {
@@ -667,36 +615,16 @@ function enlazarEventos(container) {
   }
 
   const btnToggleNuevoProveedor = container.querySelector('#btn-toggle-nuevo-proveedor');
-  if (btnToggleNuevoProveedor) {
-    btnToggleNuevoProveedor.addEventListener('click', () => {
-      estado.mostrandoNuevoProveedor = !estado.mostrandoNuevoProveedor;
-      pintarContenido(container);
-    });
-  }
+  if (btnToggleNuevoProveedor) btnToggleNuevoProveedor.addEventListener('click', () => { estado.mostrandoNuevoProveedor = !estado.mostrandoNuevoProveedor; pintarContenido(container); });
 
   const formNuevoProveedor = container.querySelector('#form-nuevo-proveedor');
-  if (formNuevoProveedor) {
-    formNuevoProveedor.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      await crearProveedorInline(container, formNuevoProveedor);
-    });
-  }
+  if (formNuevoProveedor) formNuevoProveedor.addEventListener('submit', async (e) => { e.preventDefault(); await crearProveedorInline(container, formNuevoProveedor); });
 
   const formPago = container.querySelector('#form-pago');
-  if (formPago) {
-    formPago.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      await guardarCompra(container, formPago);
-    });
-  }
+  if (formPago) formPago.addEventListener('submit', async (e) => { e.preventDefault(); await guardarCompra(container, formPago); });
 
   const formGestionar = container.querySelector('#form-gestionar');
-  if (formGestionar) {
-    formGestionar.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      await confirmarPago(container, formGestionar);
-    });
-  }
+  if (formGestionar) formGestionar.addEventListener('submit', async (e) => { e.preventDefault(); await confirmarPago(container, formGestionar); });
 }
 
 function sumarMeses(mesISO, delta) {
@@ -731,27 +659,18 @@ async function crearProveedorInline(container, form) {
 
   if (error) {
     console.error('Error creando proveedor:', error);
-    if (error.code === '23505') {
-      mostrarToast('Ya existe un proveedor registrado con ese NIT.', 'error');
-    } else {
-      mostrarToast(`No se pudo crear: ${error.message}`, 'error');
-    }
+    if (error.code === '23505') mostrarToast('Ya existe un proveedor registrado con ese NIT.', 'error');
+    else mostrarToast(`No se pudo crear: ${error.message}`, 'error');
     return;
   }
 
   mostrarToast('Proveedor creado.', 'exito');
 
-  const { data: proveedores } = await supabase
-    .from('proveedores')
-    .select('id, nombre, contacto')
-    .eq('activo', true)
-    .order('nombre', { ascending: true });
+  const { data: proveedores } = await supabase.from('proveedores').select('id, nombre, contacto').eq('activo', true).order('nombre', { ascending: true });
   estado.proveedoresActivos = proveedores || [];
   estado.mostrandoNuevoProveedor = false;
-
   pintarContenido(container);
 
-  // Autoseleccionar el proveedor recién creado en el formulario de compra.
   const selectProveedor = container.querySelector('#pago-proveedor');
   if (selectProveedor && data) {
     selectProveedor.value = data.id;
@@ -776,11 +695,8 @@ async function guardarCompra(container, form) {
   const payload = { proveedor_id, vendedor, numero_factura, fecha_compra, valor, fecha_vencimiento };
 
   let error;
-  if (estado.editandoId === 'nuevo') {
-    ({ error } = await supabase.from('proveedores_pagos').insert(payload));
-  } else {
-    ({ error } = await supabase.from('proveedores_pagos').update(payload).eq('id', estado.editandoId));
-  }
+  if (estado.editandoId === 'nuevo') ({ error } = await supabase.from('proveedores_pagos').insert(payload));
+  else ({ error } = await supabase.from('proveedores_pagos').update(payload).eq('id', estado.editandoId));
 
   if (error) {
     console.error('Error guardando compra:', error);
@@ -817,14 +733,8 @@ async function confirmarPago(container, form) {
   const { error } = await supabase
     .from('proveedores_pagos')
     .update({
-      estado: 'pagado',
-      fecha_pago,
-      valor_pagado,
-      metodo_pago,
-      cuenta_id,
-      numero_comprobante,
-      gestionado_por: perfil?.id,
-      gestionado_at: new Date().toISOString(),
+      estado: 'pagado', fecha_pago, valor_pagado, metodo_pago, cuenta_id, numero_comprobante,
+      gestionado_por: perfil?.id, gestionado_at: new Date().toISOString(),
     })
     .eq('id', estado.gestionandoId);
 
@@ -843,7 +753,6 @@ async function confirmarPago(container, form) {
 async function exportarExcel() {
   try {
     const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
-
     const filas = registrosFiltrados().map((p) => ({
       Proveedor: p.proveedores?.nombre || '',
       Vendedor: p.vendedor || '',
@@ -857,7 +766,6 @@ async function exportarExcel() {
       'Método de pago': p.metodo_pago ? etiquetaMetodo(p.metodo_pago) : '',
       Comprobante: p.numero_comprobante || '',
     }));
-
     const hoja = XLSX.utils.json_to_sheet(filas);
     const libro = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(libro, hoja, 'Agenda de Pagos');
