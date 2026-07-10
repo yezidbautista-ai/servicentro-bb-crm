@@ -18,7 +18,8 @@ const METODOS = [
   { campo: 'ventas_datafono', label: 'Datáfono' },
   { campo: 'ventas_nequi', label: 'Nequi' },
   { campo: 'ventas_daviplata', label: 'Daviplata' },
-  { campo: 'ventas_transferencia', label: 'Transferencia Bancolombia' },
+  { campo: 'ventas_transferencia_bancolombia', label: 'Transferencia Bancolombia' },
+  { campo: 'ventas_transferencia_bancodebogota', label: 'Transferencia Banco de Bogotá' },
 ];
 
 const estado = {
@@ -264,7 +265,8 @@ async function exportarExcel() {
         Datáfono: f.ventas_datafono,
         Nequi: f.ventas_nequi,
         Daviplata: f.ventas_daviplata,
-        'Transferencia Bancolombia': f.ventas_transferencia,
+        'Transferencia Bancolombia': f.ventas_transferencia_bancolombia,
+        'Transferencia Banco de Bogotá': f.ventas_transferencia_bancodebogota,
         'Salidas efectivo': f.salidas_efectivo,
         'Salidas digital': f.salidas_digital,
         'Efectivo neto': f.efectivo_neto,
