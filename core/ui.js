@@ -21,7 +21,7 @@ export function initTabs({ rol, nombreUsuario, onLogout }) {
   modulos.forEach((modulo) => {
     const tab = document.createElement('button');
     tab.type = 'button';
-    tab.className = 'tab-item';
+    tab.className = `tab-item ${modulo.parentId ? 'tab-item-sub' : ''}`;
     tab.dataset.moduleId = modulo.id;
     tab.innerHTML = `<span class="tab-icono">${modulo.icono}</span><span>${modulo.label}</span>`;
     tab.addEventListener('click', () => {
