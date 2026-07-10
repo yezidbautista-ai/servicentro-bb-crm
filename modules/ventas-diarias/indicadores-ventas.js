@@ -293,7 +293,7 @@ async function exportarExcel() {
 
 registerModule({
   id: 'indicadores-ventas',
-  label: 'Indicadores',
+  label: 'Indicadores de Ventas',
   icono: '📊',
   roles: ['admin'],
   parentId: 'ventas-diarias',
