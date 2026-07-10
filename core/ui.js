@@ -4,7 +4,7 @@
 // izquierda del logo, y una fila de pestañas horizontales alimentada desde
 // el registro de módulos (reemplaza el drawer tipo hamburguesa).
 
-import { getFlatModulesForRole } from './modules-registry.js';
+import { getModulesForRole, getSubModulesForRole } from './modules-registry.js';
 import { renderModulo } from './router.js';
 
 export function initTabs({ rol, nombreUsuario, onLogout }) {
@@ -15,10 +15,21 @@ export function initTabs({ rol, nombreUsuario, onLogout }) {
   if (nombreEl) nombreEl.textContent = nombreUsuario || '';
   if (btnSalir) btnSalir.addEventListener('click', onLogout);
 
-  const modulos = getFlatModulesForRole(rol);
   nav.innerHTML = '';
 
-  modulos.forEach((modulo) => {
+  // Cada módulo principal se pinta seguido inmediatamente de sus propias
+  // subpestañas (agrupación explícita, no depende del orden de import).
+  const principales = getModulesForRole(rol);
+  const primerModuloId = principales[0]?.id;
+
+  principales.forEach((modulo) => {
+    nav.appendChild(crearBotonPestana(modulo, rol));
+    getSubModulesForRole(modulo.id, rol).forEach((sub) => {
+      nav.appendChild(crearBotonPestana(sub, rol));
+    });
+  });
+
+  function crearBotonPestana(modulo, rol) {
     const tab = document.createElement('button');
     tab.type = 'button';
     tab.className = `tab-item ${modulo.parentId ? 'tab-item-sub' : ''}`;
@@ -28,8 +39,8 @@ export function initTabs({ rol, nombreUsuario, onLogout }) {
       renderModulo(modulo.id, rol);
       marcarActivo(modulo.id);
     });
-    nav.appendChild(tab);
-  });
+    return tab;
+  }
 
   function marcarActivo(id) {
     nav.querySelectorAll('.tab-item').forEach((el) => {
@@ -37,7 +48,7 @@ export function initTabs({ rol, nombreUsuario, onLogout }) {
     });
   }
 
-  if (modulos.length > 0) marcarActivo(modulos[0].id);
+  if (primerModuloId) marcarActivo(primerModuloId);
 
   return { marcarActivo };
 }
