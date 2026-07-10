@@ -317,6 +317,87 @@ h3 {
 
 .barra-mes .barra-porcentaje-relleno { background: var(--color-azul); opacity: 0.6; }
 
+/* ---------- Selector de vista (Lista/Calendario) ---------- */
+.selector-vista {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--color-borde);
+}
+
+.selector-vista .tab-item { border-bottom-width: 2px; }
+
+/* ---------- Calendario de Agenda de Pagos ---------- */
+.calendario-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.calendario-header h3 { margin: 0; }
+
+.calendario-leyenda {
+  display: flex;
+  gap: 1.25rem;
+  justify-content: center;
+  font-size: 0.82rem;
+  color: var(--color-texto-suave);
+  margin-bottom: 0.75rem;
+}
+
+.calendario-leyenda span { display: inline-flex; align-items: center; gap: 0.35rem; }
+
+.calendario-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.35rem;
+}
+
+.calendario-dias-semana { margin-bottom: 0.35rem; }
+
+.celda-dia-semana {
+  text-align: center;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  color: var(--color-texto-suave);
+  font-weight: 600;
+}
+
+.celda-dia {
+  background: var(--color-fondo);
+  border: 1px solid var(--color-borde);
+  border-radius: 8px;
+  padding: 0.5rem 0.25rem;
+  min-height: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font-family: var(--font-cuerpo);
+}
+
+.celda-dia:hover { background: #eceff2; }
+.celda-vacia { visibility: hidden; cursor: default; }
+.celda-hoy { border-color: var(--color-azul); border-width: 2px; }
+.celda-seleccionada { background: rgba(30, 78, 140, 0.12); border-color: var(--color-azul); }
+
+.numero-dia { font-size: 0.85rem; font-weight: 600; }
+
+.semaforo {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.semaforo-verde { background: var(--color-verde); }
+.semaforo-naranja { background: var(--color-pendiente); }
+.semaforo-rojo { background: var(--color-rojo); }
+
+.tarjeta-detalle { border-left: 4px solid var(--color-azul); }
+
 .etiqueta-enviado {
   display: inline-block;
   background: var(--color-azul);
