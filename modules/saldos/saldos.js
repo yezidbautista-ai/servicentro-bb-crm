@@ -25,6 +25,7 @@ const ORIGENES = {
   gasto_fijo: 'Gasto fijo',
   nomina: 'Nómina',
   ajuste_manual: 'Ajuste manual',
+  transferencia_interna: 'Transferencia entre cuentas',
 };
 
 const estado = {
@@ -35,6 +36,7 @@ const estado = {
   filtroHasta: '',
   editandoSaldoId: null, // id de la cuenta cuyo saldo inicial se está editando
   mostrandoFormularioAjuste: false,
+  mostrandoFormularioTransferencia: false,
 };
 
 async function render(container) {
@@ -86,6 +88,7 @@ function pintarContenido(container) {
     ${renderTarjetaCuentas()}
     ${renderTarjetaMovimientos()}
     ${estado.mostrandoFormularioAjuste ? renderFormularioAjuste() : ''}
+    ${estado.mostrandoFormularioTransferencia ? renderFormularioTransferencia() : ''}
   `;
 
   enlazarEventos(container);
@@ -184,6 +187,7 @@ function renderTarjetaMovimientos() {
 
       <div class="acciones-tarjeta">
         <button type="button" id="btn-nuevo-ajuste" class="btn btn-secundario">+ Agregar ajuste manual</button>
+        <button type="button" id="btn-nueva-transferencia" class="btn btn-azul">⇄ Transferir entre cuentas</button>
         <button type="button" id="btn-exportar-movimientos" class="btn btn-exportar">Exportar Excel</button>
       </div>
     </section>
@@ -222,6 +226,43 @@ function renderFormularioAjuste() {
       <div class="acciones-tarjeta">
         <button type="submit" form="form-ajuste" class="btn btn-primario">Guardar ajuste</button>
         <button type="button" id="btn-cancelar-ajuste" class="btn btn-secundario">Cancelar</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderFormularioTransferencia() {
+  return `
+    <section class="tarjeta">
+      <h3>Transferir entre cuentas propias</h3>
+      <form id="form-transferencia" class="form-grid">
+        <label>
+          Desde *
+          <select id="transf-desde" required>
+            <option value="">— Seleccionar —</option>
+            ${estado.cuentas.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join('')}
+          </select>
+        </label>
+        <label>
+          Hacia *
+          <select id="transf-hasta" required>
+            <option value="">— Seleccionar —</option>
+            ${estado.cuentas.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join('')}
+          </select>
+        </label>
+        <label>Fecha * <input type="date" id="transf-fecha" required value="${hoyISO()}" /></label>
+        <label>
+          Monto *
+          <div class="input-moneda">
+            <span class="prefijo">$</span>
+            <input type="text" inputmode="numeric" placeholder="0" id="transf-monto" required />
+          </div>
+        </label>
+        <label>Concepto <input type="text" id="transf-concepto" placeholder="Ej. Retiro de Nequi a Bancolombia" /></label>
+      </form>
+      <div class="acciones-tarjeta">
+        <button type="submit" form="form-transferencia" class="btn btn-primario">Confirmar transferencia</button>
+        <button type="button" id="btn-cancelar-transferencia" class="btn btn-secundario">Cancelar</button>
       </div>
     </section>
   `;
@@ -292,6 +333,30 @@ function enlazarEventos(container) {
     });
   }
 
+  const btnNuevaTransferencia = container.querySelector('#btn-nueva-transferencia');
+  if (btnNuevaTransferencia) {
+    btnNuevaTransferencia.addEventListener('click', () => {
+      estado.mostrandoFormularioTransferencia = true;
+      pintarContenido(container);
+    });
+  }
+
+  const btnCancelarTransferencia = container.querySelector('#btn-cancelar-transferencia');
+  if (btnCancelarTransferencia) {
+    btnCancelarTransferencia.addEventListener('click', () => {
+      estado.mostrandoFormularioTransferencia = false;
+      pintarContenido(container);
+    });
+  }
+
+  const formTransferencia = container.querySelector('#form-transferencia');
+  if (formTransferencia) {
+    formTransferencia.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await guardarTransferencia(container, formTransferencia);
+    });
+  }
+
   const btnExportar = container.querySelector('#btn-exportar-movimientos');
   if (btnExportar) btnExportar.addEventListener('click', exportarExcel);
 }
@@ -343,6 +408,57 @@ async function guardarAjuste(container, form) {
 
   mostrarToast('Ajuste guardado.', 'exito');
   estado.mostrandoFormularioAjuste = false;
+  await cargarYRenderizar(container);
+}
+
+async function guardarTransferencia(container, form) {
+  const perfil = getPerfilActual();
+  const cuentaDesde = form.querySelector('#transf-desde').value;
+  const cuentaHasta = form.querySelector('#transf-hasta').value;
+  const fecha = form.querySelector('#transf-fecha').value;
+  const monto = parseCOP(form.querySelector('#transf-monto').value);
+  const conceptoBase = form.querySelector('#transf-concepto').value.trim();
+
+  if (!cuentaDesde || !cuentaHasta || !fecha || monto <= 0) {
+    mostrarToast('Todos los campos son obligatorios.', 'error');
+    return;
+  }
+  if (cuentaDesde === cuentaHasta) {
+    mostrarToast('La cuenta de origen y destino no pueden ser la misma.', 'error');
+    return;
+  }
+
+  const nombreDesde = estado.cuentas.find((c) => c.id === cuentaDesde)?.nombre || '';
+  const nombreHasta = estado.cuentas.find((c) => c.id === cuentaHasta)?.nombre || '';
+  const concepto = conceptoBase || `Transferencia ${nombreDesde} → ${nombreHasta}`;
+
+  const { error } = await supabase.from('movimientos_cuenta').insert([
+    {
+      cuenta_id: cuentaDesde,
+      fecha,
+      valor: -monto,
+      concepto: `${concepto} (salida)`,
+      origen_tipo: 'transferencia_interna',
+      created_by: perfil?.id,
+    },
+    {
+      cuenta_id: cuentaHasta,
+      fecha,
+      valor: monto,
+      concepto: `${concepto} (entrada)`,
+      origen_tipo: 'transferencia_interna',
+      created_by: perfil?.id,
+    },
+  ]);
+
+  if (error) {
+    console.error('Error guardando transferencia:', error);
+    mostrarToast(`No se pudo guardar: ${error.message}`, 'error');
+    return;
+  }
+
+  mostrarToast('Transferencia registrada.', 'exito');
+  estado.mostrandoFormularioTransferencia = false;
   await cargarYRenderizar(container);
 }
 
