@@ -35,13 +35,10 @@ const estado = {
   filtroDesde: '',
   filtroHasta: '',
   editandoSaldoId: null, // id de la cuenta cuyo saldo inicial se está editando
-  mostrandoFormularioAjuste: false,
-  mostrandoFormularioTransferencia: false,
 };
 
 async function render(container) {
   estado.editandoSaldoId = null;
-  estado.mostrandoFormularioAjuste = false;
 
   container.innerHTML = `
     <h2>Saldos y Cuentas</h2>
@@ -87,8 +84,6 @@ function pintarContenido(container) {
   contenido.innerHTML = `
     ${renderTarjetaCuentas()}
     ${renderTarjetaMovimientos()}
-    ${estado.mostrandoFormularioAjuste ? renderFormularioAjuste() : ''}
-    ${estado.mostrandoFormularioTransferencia ? renderFormularioTransferencia() : ''}
   `;
 
   enlazarEventos(container);
@@ -105,9 +100,6 @@ function renderTarjetaCuentas() {
           ${estado.cuentas.map((c) => renderFilaCuenta(c)).join('')}
         </tbody>
       </table>
-      <p class="mensaje-vacio">
-        Datáfono no está mapeado a ninguna cuenta — ese dinero se ve en Ventas Diarias pero no mueve ningún saldo aquí todavía.
-      </p>
     </section>
   `;
 }
@@ -194,78 +186,115 @@ function renderTarjetaMovimientos() {
   `;
 }
 
-function renderFormularioAjuste() {
-  return `
-    <section class="tarjeta">
-      <h3>Ajuste manual</h3>
-      <form id="form-ajuste" class="form-grid">
-        <label>
-          Cuenta *
-          <select id="ajuste-cuenta" required>
-            <option value="">— Seleccionar —</option>
-            ${estado.cuentas.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join('')}
-          </select>
-        </label>
-        <label>Fecha * <input type="date" id="ajuste-fecha" required value="${hoyISO()}" /></label>
-        <label>
-          Valor * (usa signo negativo para restar, ej. escribe primero el número y usa el selector)
-          <select id="ajuste-signo">
-            <option value="1">Sumar al saldo (entrada)</option>
-            <option value="-1">Restar del saldo (salida)</option>
-          </select>
-        </label>
-        <label>
-          Monto
-          <div class="input-moneda">
-            <span class="prefijo">$</span>
-            <input type="text" inputmode="numeric" placeholder="0" id="ajuste-monto" required />
-          </div>
-        </label>
-        <label>Concepto * <input type="text" id="ajuste-concepto" required placeholder="Ej. Corrección por conteo físico" /></label>
-      </form>
-      <div class="acciones-tarjeta">
-        <button type="submit" form="form-ajuste" class="btn btn-primario">Guardar ajuste</button>
-        <button type="button" id="btn-cancelar-ajuste" class="btn btn-secundario">Cancelar</button>
-      </div>
-    </section>
-  `;
+function crearOverlayModal(contenidoHTML) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `<div class="modal-caja">${contenidoHTML}</div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+  return overlay;
 }
 
-function renderFormularioTransferencia() {
-  return `
-    <section class="tarjeta">
-      <h3>Transferir entre cuentas propias</h3>
-      <form id="form-transferencia" class="form-grid">
-        <label>
-          Desde *
-          <select id="transf-desde" required>
-            <option value="">— Seleccionar —</option>
-            ${estado.cuentas.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join('')}
-          </select>
-        </label>
-        <label>
-          Hacia *
-          <select id="transf-hasta" required>
-            <option value="">— Seleccionar —</option>
-            ${estado.cuentas.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join('')}
-          </select>
-        </label>
-        <label>Fecha * <input type="date" id="transf-fecha" required value="${hoyISO()}" /></label>
-        <label>
-          Monto *
-          <div class="input-moneda">
-            <span class="prefijo">$</span>
-            <input type="text" inputmode="numeric" placeholder="0" id="transf-monto" required />
-          </div>
-        </label>
-        <label>Concepto <input type="text" id="transf-concepto" placeholder="Ej. Retiro de Nequi a Bancolombia" /></label>
-      </form>
-      <div class="acciones-tarjeta">
-        <button type="submit" form="form-transferencia" class="btn btn-primario">Confirmar transferencia</button>
-        <button type="button" id="btn-cancelar-transferencia" class="btn btn-secundario">Cancelar</button>
-      </div>
-    </section>
+function abrirModalAjuste(container) {
+  const contenido = `
+    <h3>Ajuste manual</h3>
+    <form class="form-ajuste-modal form-grid">
+      <label>
+        Cuenta *
+        <select class="aj-cuenta" required>
+          <option value="">— Seleccionar —</option>
+          ${estado.cuentas.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join('')}
+        </select>
+      </label>
+      <label>Fecha * <input type="date" class="aj-fecha" required value="${hoyISO()}" /></label>
+      <label>
+        Tipo de movimiento
+        <select class="aj-signo">
+          <option value="1">Sumar al saldo (entrada)</option>
+          <option value="-1">Restar del saldo (salida)</option>
+        </select>
+      </label>
+      <label>
+        Monto
+        <div class="input-moneda">
+          <span class="prefijo">$</span>
+          <input type="text" inputmode="numeric" placeholder="0" class="aj-monto" required />
+        </div>
+      </label>
+      <label>Concepto * <input type="text" class="aj-concepto" required placeholder="Ej. Corrección por conteo físico" /></label>
+    </form>
+    <div class="acciones-tarjeta">
+      <button type="button" class="btn btn-primario btn-modal-guardar-ajuste">Guardar ajuste</button>
+      <button type="button" class="btn btn-secundario btn-modal-cancelar-ajuste">Cancelar</button>
+    </div>
   `;
+
+  const overlay = crearOverlayModal(contenido);
+  overlay.querySelectorAll('.input-moneda input').forEach(activarInputMoneda);
+  const form = overlay.querySelector('.form-ajuste-modal');
+
+  overlay.querySelector('.btn-modal-cancelar-ajuste').addEventListener('click', () => overlay.remove());
+
+  const enviar = async (e) => {
+    if (e) e.preventDefault();
+    const exito = await guardarAjuste(container, form);
+    if (exito) overlay.remove();
+  };
+
+  form.addEventListener('submit', enviar);
+  overlay.querySelector('.btn-modal-guardar-ajuste').addEventListener('click', enviar);
+}
+
+function abrirModalTransferencia(container) {
+  const contenido = `
+    <h3>Transferir entre cuentas propias</h3>
+    <form class="form-transferencia-modal form-grid">
+      <label>
+        Desde *
+        <select class="tr-desde" required>
+          <option value="">— Seleccionar —</option>
+          ${estado.cuentas.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join('')}
+        </select>
+      </label>
+      <label>
+        Hacia *
+        <select class="tr-hasta" required>
+          <option value="">— Seleccionar —</option>
+          ${estado.cuentas.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join('')}
+        </select>
+      </label>
+      <label>Fecha * <input type="date" class="tr-fecha" required value="${hoyISO()}" /></label>
+      <label>
+        Monto *
+        <div class="input-moneda">
+          <span class="prefijo">$</span>
+          <input type="text" inputmode="numeric" placeholder="0" class="tr-monto" required />
+        </div>
+      </label>
+      <label>Concepto <input type="text" class="tr-concepto" placeholder="Ej. Retiro de Nequi a Bancolombia" /></label>
+    </form>
+    <div class="acciones-tarjeta">
+      <button type="button" class="btn btn-primario btn-modal-guardar-transferencia">Confirmar transferencia</button>
+      <button type="button" class="btn btn-secundario btn-modal-cancelar-transferencia">Cancelar</button>
+    </div>
+  `;
+
+  const overlay = crearOverlayModal(contenido);
+  overlay.querySelectorAll('.input-moneda input').forEach(activarInputMoneda);
+  const form = overlay.querySelector('.form-transferencia-modal');
+
+  overlay.querySelector('.btn-modal-cancelar-transferencia').addEventListener('click', () => overlay.remove());
+
+  const enviar = async (e) => {
+    if (e) e.preventDefault();
+    const exito = await guardarTransferencia(container, form);
+    if (exito) overlay.remove();
+  };
+
+  form.addEventListener('submit', enviar);
+  overlay.querySelector('.btn-modal-guardar-transferencia').addEventListener('click', enviar);
 }
 
 function enlazarEventos(container) {
@@ -310,52 +339,10 @@ function enlazarEventos(container) {
   }
 
   const btnNuevoAjuste = container.querySelector('#btn-nuevo-ajuste');
-  if (btnNuevoAjuste) {
-    btnNuevoAjuste.addEventListener('click', () => {
-      estado.mostrandoFormularioAjuste = true;
-      pintarContenido(container);
-    });
-  }
-
-  const btnCancelarAjuste = container.querySelector('#btn-cancelar-ajuste');
-  if (btnCancelarAjuste) {
-    btnCancelarAjuste.addEventListener('click', () => {
-      estado.mostrandoFormularioAjuste = false;
-      pintarContenido(container);
-    });
-  }
-
-  const formAjuste = container.querySelector('#form-ajuste');
-  if (formAjuste) {
-    formAjuste.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      await guardarAjuste(container, formAjuste);
-    });
-  }
+  if (btnNuevoAjuste) btnNuevoAjuste.addEventListener('click', () => abrirModalAjuste(container));
 
   const btnNuevaTransferencia = container.querySelector('#btn-nueva-transferencia');
-  if (btnNuevaTransferencia) {
-    btnNuevaTransferencia.addEventListener('click', () => {
-      estado.mostrandoFormularioTransferencia = true;
-      pintarContenido(container);
-    });
-  }
-
-  const btnCancelarTransferencia = container.querySelector('#btn-cancelar-transferencia');
-  if (btnCancelarTransferencia) {
-    btnCancelarTransferencia.addEventListener('click', () => {
-      estado.mostrandoFormularioTransferencia = false;
-      pintarContenido(container);
-    });
-  }
-
-  const formTransferencia = container.querySelector('#form-transferencia');
-  if (formTransferencia) {
-    formTransferencia.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      await guardarTransferencia(container, formTransferencia);
-    });
-  }
+  if (btnNuevaTransferencia) btnNuevaTransferencia.addEventListener('click', () => abrirModalTransferencia(container));
 
   const btnExportar = container.querySelector('#btn-exportar-movimientos');
   if (btnExportar) btnExportar.addEventListener('click', exportarExcel);
@@ -380,15 +367,15 @@ async function guardarSaldoInicial(container, cuentaId) {
 
 async function guardarAjuste(container, form) {
   const perfil = getPerfilActual();
-  const cuenta_id = form.querySelector('#ajuste-cuenta').value;
-  const fecha = form.querySelector('#ajuste-fecha').value;
-  const signo = Number(form.querySelector('#ajuste-signo').value);
-  const monto = parseCOP(form.querySelector('#ajuste-monto').value);
-  const concepto = form.querySelector('#ajuste-concepto').value.trim();
+  const cuenta_id = form.querySelector('.aj-cuenta').value;
+  const fecha = form.querySelector('.aj-fecha').value;
+  const signo = Number(form.querySelector('.aj-signo').value);
+  const monto = parseCOP(form.querySelector('.aj-monto').value);
+  const concepto = form.querySelector('.aj-concepto').value.trim();
 
   if (!cuenta_id || !fecha || monto <= 0 || !concepto) {
     mostrarToast('Todos los campos son obligatorios.', 'error');
-    return;
+    return false;
   }
 
   const { error } = await supabase.from('movimientos_cuenta').insert({
@@ -403,29 +390,29 @@ async function guardarAjuste(container, form) {
   if (error) {
     console.error('Error guardando ajuste:', error);
     mostrarToast(`No se pudo guardar: ${error.message}`, 'error');
-    return;
+    return false;
   }
 
   mostrarToast('Ajuste guardado.', 'exito');
-  estado.mostrandoFormularioAjuste = false;
   await cargarYRenderizar(container);
+  return true;
 }
 
 async function guardarTransferencia(container, form) {
   const perfil = getPerfilActual();
-  const cuentaDesde = form.querySelector('#transf-desde').value;
-  const cuentaHasta = form.querySelector('#transf-hasta').value;
-  const fecha = form.querySelector('#transf-fecha').value;
-  const monto = parseCOP(form.querySelector('#transf-monto').value);
-  const conceptoBase = form.querySelector('#transf-concepto').value.trim();
+  const cuentaDesde = form.querySelector('.tr-desde').value;
+  const cuentaHasta = form.querySelector('.tr-hasta').value;
+  const fecha = form.querySelector('.tr-fecha').value;
+  const monto = parseCOP(form.querySelector('.tr-monto').value);
+  const conceptoBase = form.querySelector('.tr-concepto').value.trim();
 
   if (!cuentaDesde || !cuentaHasta || !fecha || monto <= 0) {
     mostrarToast('Todos los campos son obligatorios.', 'error');
-    return;
+    return false;
   }
   if (cuentaDesde === cuentaHasta) {
     mostrarToast('La cuenta de origen y destino no pueden ser la misma.', 'error');
-    return;
+    return false;
   }
 
   const nombreDesde = estado.cuentas.find((c) => c.id === cuentaDesde)?.nombre || '';
@@ -454,12 +441,12 @@ async function guardarTransferencia(container, form) {
   if (error) {
     console.error('Error guardando transferencia:', error);
     mostrarToast(`No se pudo guardar: ${error.message}`, 'error');
-    return;
+    return false;
   }
 
   mostrarToast('Transferencia registrada.', 'exito');
-  estado.mostrandoFormularioTransferencia = false;
   await cargarYRenderizar(container);
+  return true;
 }
 
 async function exportarExcel() {
