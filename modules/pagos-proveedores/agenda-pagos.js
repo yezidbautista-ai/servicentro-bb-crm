@@ -56,12 +56,10 @@ const estado = {
   filtroHasta: '',
   busquedaDia: '',
   editandoId: null,
-  gestionandoId: null,
   mostrandoNuevoProveedor: false,
   vistaPrincipal: 'dia', // 'dia' | 'tabla'
   mesCalendario: hoyISO().slice(0, 7),
   diaSeleccionado: hoyISO(),
-  detalleId: null,
 };
 
 function etiquetaMetodo(valor) {
@@ -86,9 +84,7 @@ function nombreDiaLargo(fechaISO) {
 
 async function render(container) {
   estado.editandoId = null;
-  estado.gestionandoId = null;
   estado.mostrandoNuevoProveedor = false;
-  estado.detalleId = null;
   estado.diaSeleccionado = hoyISO();
   estado.mesCalendario = hoyISO().slice(0, 7);
 
@@ -154,7 +150,6 @@ function pintarContenido(container) {
       </div>
     </div>
     ${estado.editandoId !== null ? renderFormularioCompra() : ''}
-    ${estado.gestionandoId !== null ? renderFormularioGestionar() : ''}
   `;
 
   enlazarEventos(container);
@@ -306,7 +301,6 @@ function renderVistaDia() {
           : `<div class="lista-tarjetas-pago">${delDia.map((p) => renderTarjetaPagoDia(p)).join('')}</div>`
       }
     </section>
-    ${estado.detalleId ? renderTarjetaDetalle() : ''}
   `;
 }
 
@@ -331,37 +325,122 @@ function renderTarjetaPagoDia(p) {
   `;
 }
 
-function renderTarjetaDetalle() {
-  const p = estado.registros.find((x) => x.id === estado.detalleId);
-  if (!p) return '';
+function crearOverlayModal(contenidoHTML) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `<div class="modal-caja modal-caja-ancha">${contenidoHTML}</div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+  return overlay;
+}
+
+function abrirModalDetalle(container, id) {
+  const p = estado.registros.find((x) => x.id === id);
+  if (!p) return;
   const real = estadoReal(p);
 
-  return `
-    <div class="tarjeta tarjeta-detalle">
-      <h3>Detalle del pago — ${p.proveedores?.nombre || ''}</h3>
-      <div class="recibo-linea"><span>Vendedor</span><span>${p.vendedor || '—'}</span></div>
-      <div class="recibo-linea"><span>Número de factura</span><span>${p.numero_factura || '—'}</span></div>
-      <div class="recibo-linea"><span>Fecha de compra</span><span>${p.fecha_compra}</span></div>
-      <div class="recibo-linea"><span>Valor</span><span class="monto">${formatCOP(p.valor)}</span></div>
-      <div class="recibo-linea"><span>Fecha de vencimiento</span><span>${p.fecha_vencimiento}</span></div>
-      <div class="recibo-linea"><span>Estado</span><span><span class="badge badge-${real}">${etiquetaEstado(real)}</span></span></div>
-      ${
-        p.estado === 'pagado'
-          ? `
-        <div class="recibo-linea"><span>Fecha de pago</span><span>${p.fecha_pago || '—'}</span></div>
-        <div class="recibo-linea"><span>Valor pagado</span><span class="monto">${formatCOP(p.valor_pagado)}</span></div>
-        <div class="recibo-linea"><span>Método de pago</span><span>${etiquetaMetodo(p.metodo_pago)}</span></div>
-        <div class="recibo-linea"><span>Comprobante</span><span>${p.numero_comprobante || '—'}</span></div>
-      `
-          : ''
-      }
-      <div class="acciones-tarjeta">
-        ${real !== 'pagado' ? `<button type="button" class="btn btn-primario btn-marcar-pagado" data-id="${p.id}">Pagar</button>` : ''}
-        <button type="button" class="btn-editar-salida btn-editar-pago" data-id="${p.id}">Editar</button>
-        <button type="button" id="btn-cerrar-detalle" class="btn btn-secundario">Cerrar</button>
-      </div>
+  const contenido = `
+    <h3>Detalle del pago — ${p.proveedores?.nombre || ''}</h3>
+    <div class="recibo-linea"><span>Vendedor</span><span>${p.vendedor || '—'}</span></div>
+    <div class="recibo-linea"><span>Número de factura</span><span>${p.numero_factura || '—'}</span></div>
+    <div class="recibo-linea"><span>Fecha de compra</span><span>${p.fecha_compra}</span></div>
+    <div class="recibo-linea"><span>Valor</span><span class="monto">${formatCOP(p.valor)}</span></div>
+    <div class="recibo-linea"><span>Fecha de vencimiento</span><span>${p.fecha_vencimiento}</span></div>
+    <div class="recibo-linea"><span>Estado</span><span><span class="badge badge-${real}">${etiquetaEstado(real)}</span></span></div>
+    ${
+      p.estado === 'pagado'
+        ? `
+      <div class="recibo-linea"><span>Fecha de pago</span><span>${p.fecha_pago || '—'}</span></div>
+      <div class="recibo-linea"><span>Valor pagado</span><span class="monto">${formatCOP(p.valor_pagado)}</span></div>
+      <div class="recibo-linea"><span>Método de pago</span><span>${etiquetaMetodo(p.metodo_pago)}</span></div>
+      <div class="recibo-linea"><span>Comprobante</span><span>${p.numero_comprobante || '—'}</span></div>
+    `
+        : ''
+    }
+    <div class="acciones-tarjeta">
+      ${real !== 'pagado' ? `<button type="button" class="btn btn-primario btn-modal-pagar">Pagar</button>` : ''}
+      <button type="button" class="btn-editar-salida btn-modal-editar">Editar</button>
+      <button type="button" class="btn btn-secundario btn-modal-cerrar">Cerrar</button>
     </div>
   `;
+
+  const overlay = crearOverlayModal(contenido);
+
+  const btnPagar = overlay.querySelector('.btn-modal-pagar');
+  if (btnPagar) btnPagar.addEventListener('click', () => abrirModalGestionar(container, id, overlay));
+
+  const btnEditar = overlay.querySelector('.btn-modal-editar');
+  if (btnEditar) {
+    btnEditar.addEventListener('click', () => {
+      overlay.remove();
+      estado.editandoId = id;
+      pintarContenido(container);
+    });
+  }
+
+  const btnCerrar = overlay.querySelector('.btn-modal-cerrar');
+  if (btnCerrar) btnCerrar.addEventListener('click', () => overlay.remove());
+}
+
+function abrirModalGestionar(container, id, overlayPadre) {
+  const p = estado.registros.find((x) => x.id === id);
+  if (!p) return;
+
+  const contenido = `
+    <h3>Marcar como pagado — ${p.proveedores?.nombre || ''}</h3>
+    <form class="form-gestionar-modal form-grid">
+      <label>Fecha de pago * <input type="date" class="gm-fecha-pago" required value="${hoyISO()}" /></label>
+      <label>
+        Valor pagado *
+        <div class="input-moneda">
+          <span class="prefijo">$</span>
+          <input type="text" inputmode="numeric" placeholder="0" class="gm-valor-pagado" required value="${formatearMientrasEscribe(String(p.valor))}" />
+        </div>
+      </label>
+      <label>
+        Método de pago *
+        <select class="gm-metodo-pago" required>
+          <option value="">— Seleccionar —</option>
+          ${METODOS_PAGO.map((m) => `<option value="${m.value}">${m.label}</option>`).join('')}
+        </select>
+      </label>
+      <label>
+        ¿De dónde salieron los fondos? *
+        <select class="gm-cuenta" required>
+          <option value="">— Seleccionar —</option>
+          ${estado.cuentasActivas.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join('')}
+        </select>
+      </label>
+      <label>Número de comprobante <input type="text" class="gm-comprobante" /></label>
+    </form>
+    <div class="acciones-tarjeta">
+      <button type="button" class="btn btn-primario btn-modal-confirmar-pago">Marcar como pagada</button>
+      <button type="button" class="btn btn-secundario btn-modal-cancelar-pago">Cancelar</button>
+    </div>
+  `;
+
+  const overlay = crearOverlayModal(contenido);
+  overlay.querySelectorAll('.input-moneda input').forEach(activarInputMoneda);
+
+  const form = overlay.querySelector('.form-gestionar-modal');
+  const btnConfirmar = overlay.querySelector('.btn-modal-confirmar-pago');
+  const btnCancelar = overlay.querySelector('.btn-modal-cancelar-pago');
+
+  btnCancelar.addEventListener('click', () => overlay.remove());
+
+  const enviar = async (e) => {
+    if (e) e.preventDefault();
+    const exito = await confirmarPago(container, form, id);
+    if (exito) {
+      overlay.remove();
+      if (overlayPadre) overlayPadre.remove();
+    }
+  };
+
+  form.addEventListener('submit', enviar);
+  btnConfirmar.addEventListener('click', enviar);
 }
 
 function renderVistaTabla() {
@@ -495,46 +574,6 @@ function renderFormularioNuevoProveedor() {
   `;
 }
 
-function renderFormularioGestionar() {
-  const p = estado.registros.find((x) => x.id === estado.gestionandoId);
-  if (!p) return '';
-
-  return `
-    <section class="tarjeta">
-      <h3>Marcar como pagado — ${p.proveedores?.nombre || ''}</h3>
-      <form id="form-gestionar" class="form-grid">
-        <label>Fecha de pago * <input type="date" id="gestion-fecha-pago" required value="${hoyISO()}" /></label>
-        <label>
-          Valor pagado *
-          <div class="input-moneda">
-            <span class="prefijo">$</span>
-            <input type="text" inputmode="numeric" placeholder="0" id="gestion-valor-pagado" required value="${formatearMientrasEscribe(String(p.valor))}" />
-          </div>
-        </label>
-        <label>
-          Método de pago *
-          <select id="gestion-metodo-pago" required>
-            <option value="">— Seleccionar —</option>
-            ${METODOS_PAGO.map((m) => `<option value="${m.value}">${m.label}</option>`).join('')}
-          </select>
-        </label>
-        <label>
-          ¿De dónde salieron los fondos? *
-          <select id="gestion-cuenta" required>
-            <option value="">— Seleccionar —</option>
-            ${estado.cuentasActivas.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join('')}
-          </select>
-        </label>
-        <label>Número de comprobante <input type="text" id="gestion-comprobante" /></label>
-      </form>
-      <div class="acciones-tarjeta">
-        <button type="submit" form="form-gestionar" class="btn btn-primario">Marcar como pagada</button>
-        <button type="button" id="btn-cancelar-gestion" class="btn btn-secundario">Cancelar</button>
-      </div>
-    </section>
-  `;
-}
-
 // ============ EVENTOS ============
 
 function enlazarEventos(container) {
@@ -546,7 +585,6 @@ function enlazarEventos(container) {
   container.querySelectorAll('.celda-dia:not(.celda-vacia)').forEach((btn) => {
     btn.addEventListener('click', () => {
       estado.diaSeleccionado = btn.dataset.fecha;
-      estado.detalleId = null;
       estado.vistaPrincipal = 'dia';
       pintarContenido(container);
     });
@@ -575,10 +613,8 @@ function enlazarEventos(container) {
   }
 
   container.querySelectorAll('.btn-ver-detalle').forEach((btn) => {
-    btn.addEventListener('click', () => { estado.detalleId = btn.dataset.id; pintarContenido(container); });
+    btn.addEventListener('click', () => abrirModalDetalle(container, btn.dataset.id));
   });
-  const btnCerrarDetalle = container.querySelector('#btn-cerrar-detalle');
-  if (btnCerrarDetalle) btnCerrarDetalle.addEventListener('click', () => { estado.detalleId = null; pintarContenido(container); });
 
   const filtroProveedor = container.querySelector('#filtro-proveedor');
   if (filtroProveedor) filtroProveedor.addEventListener('change', (e) => { estado.filtroProveedor = e.target.value; pintarContenido(container); });
@@ -597,13 +633,11 @@ function enlazarEventos(container) {
     btn.addEventListener('click', () => { estado.editandoId = btn.dataset.id; pintarContenido(container); });
   });
   container.querySelectorAll('.btn-marcar-pagado').forEach((btn) => {
-    btn.addEventListener('click', () => { estado.gestionandoId = btn.dataset.id; pintarContenido(container); });
+    btn.addEventListener('click', () => abrirModalGestionar(container, btn.dataset.id, null));
   });
 
   const btnCancelarPago = container.querySelector('#btn-cancelar-pago');
   if (btnCancelarPago) btnCancelarPago.addEventListener('click', () => { estado.editandoId = null; estado.mostrandoNuevoProveedor = false; pintarContenido(container); });
-  const btnCancelarGestion = container.querySelector('#btn-cancelar-gestion');
-  if (btnCancelarGestion) btnCancelarGestion.addEventListener('click', () => { estado.gestionandoId = null; pintarContenido(container); });
 
   const selectProveedor = container.querySelector('#pago-proveedor');
   if (selectProveedor) {
@@ -622,9 +656,6 @@ function enlazarEventos(container) {
 
   const formPago = container.querySelector('#form-pago');
   if (formPago) formPago.addEventListener('submit', async (e) => { e.preventDefault(); await guardarCompra(container, formPago); });
-
-  const formGestionar = container.querySelector('#form-gestionar');
-  if (formGestionar) formGestionar.addEventListener('submit', async (e) => { e.preventDefault(); await confirmarPago(container, formGestionar); });
 }
 
 function sumarMeses(mesISO, delta) {
@@ -710,17 +741,17 @@ async function guardarCompra(container, form) {
   await cargarYRenderizar(container);
 }
 
-async function confirmarPago(container, form) {
+async function confirmarPago(container, form, id) {
   const perfil = getPerfilActual();
-  const fecha_pago = form.querySelector('#gestion-fecha-pago').value;
-  const valor_pagado = parseCOP(form.querySelector('#gestion-valor-pagado').value);
-  const metodo_pago = form.querySelector('#gestion-metodo-pago').value;
-  const cuenta_id = form.querySelector('#gestion-cuenta').value;
-  const numero_comprobante = form.querySelector('#gestion-comprobante').value.trim();
+  const fecha_pago = form.querySelector('.gm-fecha-pago').value;
+  const valor_pagado = parseCOP(form.querySelector('.gm-valor-pagado').value);
+  const metodo_pago = form.querySelector('.gm-metodo-pago').value;
+  const cuenta_id = form.querySelector('.gm-cuenta').value;
+  const numero_comprobante = form.querySelector('.gm-comprobante').value.trim();
 
   if (!fecha_pago || valor_pagado <= 0 || !metodo_pago || !cuenta_id) {
     mostrarToast('Fecha de pago, valor pagado, método de pago y cuenta de origen son obligatorios.', 'error');
-    return;
+    return false;
   }
 
   const confirmado = await mostrarConfirmacion({
@@ -728,7 +759,7 @@ async function confirmarPago(container, form) {
     contenidoHTML: `<p>¿Confirmas el pago de <strong>${formatCOP(valor_pagado)}</strong> por <strong>${etiquetaMetodo(metodo_pago)}</strong>? Esto va a descontar el saldo de la cuenta seleccionada.</p>`,
     textoConfirmar: 'Sí, confirmar',
   });
-  if (!confirmado) return;
+  if (!confirmado) return false;
 
   const { error } = await supabase
     .from('proveedores_pagos')
@@ -736,18 +767,17 @@ async function confirmarPago(container, form) {
       estado: 'pagado', fecha_pago, valor_pagado, metodo_pago, cuenta_id, numero_comprobante,
       gestionado_por: perfil?.id, gestionado_at: new Date().toISOString(),
     })
-    .eq('id', estado.gestionandoId);
+    .eq('id', id);
 
   if (error) {
     console.error('Error confirmando pago:', error);
     mostrarToast(`No se pudo confirmar: ${error.message}`, 'error');
-    return;
+    return false;
   }
 
   mostrarToast('Pago confirmado.', 'exito');
-  estado.gestionandoId = null;
-  estado.detalleId = null;
   await cargarYRenderizar(container);
+  return true;
 }
 
 async function exportarExcel() {
