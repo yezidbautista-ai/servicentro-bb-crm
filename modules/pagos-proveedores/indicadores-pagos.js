@@ -100,13 +100,15 @@ async function pintarContenido(container) {
 
   contenido.innerHTML = `
     <div class="grid-dos-columnas">
-      <div class="recibo recibo-cierre">
-        <div class="recibo-header">Pendientes por pagar — mes actual</div>
-        <div class="recibo-linea recibo-total"><span>${mesesRestantes[0].nombre} (${mesesRestantes[0].cantidad})</span><span class="monto">${formatCOP(mesesRestantes[0].valor)}</span></div>
+      <div class="stat-card stat-card-naranja">
+        <div class="stat-card-label">Pendientes por pagar — mes actual</div>
+        <div class="stat-card-valor">${formatCOP(mesesRestantes[0].valor)}</div>
+        <div class="stat-card-subtitulo">${mesesRestantes[0].nombre} · ${mesesRestantes[0].cantidad} factura(s)</div>
       </div>
-      <div class="recibo recibo-cierre">
-        <div class="recibo-header">Pendientes hasta diciembre ${anioActual}</div>
-        <div class="recibo-linea recibo-total"><span>Total acumulado</span><span class="monto">${formatCOP(totalPendienteHastaDiciembre)}</span></div>
+      <div class="stat-card stat-card-azul">
+        <div class="stat-card-label">Pendientes hasta diciembre ${anioActual}</div>
+        <div class="stat-card-valor">${formatCOP(totalPendienteHastaDiciembre)}</div>
+        <div class="stat-card-subtitulo">Total acumulado</div>
       </div>
     </div>
 
@@ -122,13 +124,15 @@ async function pintarContenido(container) {
     </section>
 
     <div class="grid-dos-columnas">
-      <div class="recibo recibo-cierre">
-        <div class="recibo-header">Facturas pagadas — mes actual</div>
-        <div class="recibo-linea recibo-total"><span>${pagadasMesActual.length} factura(s)</span><span class="monto monto-ingreso">${formatCOP(sumar(pagadasMesActual))}</span></div>
+      <div class="stat-card stat-card-verde">
+        <div class="stat-card-label">Facturas pagadas — mes actual</div>
+        <div class="stat-card-valor">${formatCOP(sumar(pagadasMesActual))}</div>
+        <div class="stat-card-subtitulo">${pagadasMesActual.length} factura(s)</div>
       </div>
-      <div class="recibo recibo-cierre">
-        <div class="recibo-header">Facturas pagadas — año ${anioActual}</div>
-        <div class="recibo-linea recibo-total"><span>${pagadasHistoricoAnio.length} factura(s)</span><span class="monto monto-ingreso">${formatCOP(sumar(pagadasHistoricoAnio))}</span></div>
+      <div class="stat-card stat-card-verde">
+        <div class="stat-card-label">Facturas pagadas — año ${anioActual}</div>
+        <div class="stat-card-valor">${formatCOP(sumar(pagadasHistoricoAnio))}</div>
+        <div class="stat-card-subtitulo">${pagadasHistoricoAnio.length} factura(s)</div>
       </div>
     </div>
 
@@ -198,7 +202,7 @@ async function dibujarGraficas(container, mesesRestantes, origenMes, origenHisto
 
 registerModule({
   id: 'indicadores-pagos',
-  label: 'Indicadores',
+  label: 'Indicadores de Pagos',
   icono: '📊',
   roles: ['admin'],
   parentId: 'agenda-pagos',
