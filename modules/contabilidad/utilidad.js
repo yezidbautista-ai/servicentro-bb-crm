@@ -71,9 +71,9 @@ async function cargarYRenderizar(container) {
       .gte('fecha_pago', estado.desde)
       .lte('fecha_pago', estado.hasta),
     supabase
-      .from('nomina_liquidaciones')
-      .select('costo_total_empleador, fecha_pago')
-      .eq('pagada', true)
+      .from('nomina_pagos')
+      .select('valor, fecha_pago')
+      .eq('pagado', true)
       .gte('fecha_pago', estado.desde)
       .lte('fecha_pago', estado.hasta),
   ]);
@@ -83,7 +83,7 @@ async function cargarYRenderizar(container) {
   estado.ingresos = (ventas || []).reduce((acc, v) => acc + Number(v.total_venta_diaria || 0), 0);
   estado.egresosProveedores = (pagosProv || []).reduce((acc, p) => acc + Number(p.valor_pagado || 0), 0);
   estado.egresosGastosFijos = (gastosFijos || []).reduce((acc, g) => acc + Number(g.valor || 0), 0);
-  estado.egresosNomina = (nomina || []).reduce((acc, n) => acc + Number(n.costo_total_empleador || 0), 0);
+  estado.egresosNomina = (nomina || []).reduce((acc, n) => acc + Number(n.valor || 0), 0);
 
   pintarContenido(container);
 }
