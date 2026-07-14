@@ -31,9 +31,8 @@ export const PORCENTAJES = {
   // --- A cargo del empleador ---
   salud_empleador: 0.085, // exonerado si APLICA_EXONERACION_ART_114_1 y salario < umbral
   pension_empleador: 0.12, // nunca se exonera
-  arl: null, // ⚠️ PENDIENTE — depende de la clase de riesgo ARL (I a V, 0.522% a 6.96%).
-  // No se fija un valor por defecto a propósito: usar este helper con arl=null
-  // lanza un error controlado en vez de calcular nómina con un supuesto equivocado.
+  arl: 0.02436, // Confirmado por el usuario: Riesgo 3 (Clase III) = 2.436% del IBC,
+  // fijado por Decreto 1607/2002 y 1772/1994, a cargo 100% del empleador.
   caja_compensacion: 0.04, // nunca se exonera
   icbf: 0.03, // exonerado si APLICA_EXONERACION_ART_114_1 y salario < umbral
   sena: 0.02, // exonerado si APLICA_EXONERACION_ART_114_1 y salario < umbral
@@ -54,6 +53,36 @@ export const PORCENTAJES = {
  */
 export function calcularAuxilioTransporte(salarioBasico) {
   return salarioBasico < TOPE_AUXILIO_TRANSPORTE ? AUXILIO_TRANSPORTE_2026 : 0;
+}
+
+/**
+ * Liquidación para contratistas por prestación de servicios: NO son
+ * empleados, así que no llevan parafiscales, prestaciones sociales, ni
+ * aportes patronales — el "costo total empleador" es simplemente el valor
+ * mensual acordado. Se sigue devolviendo la misma forma de objeto que
+ * calcularLiquidacionMensual (con ceros donde no aplica) para no tener que
+ * ramificar el esquema de `nomina_liquidaciones`.
+ */
+export function calcularLiquidacionPrestacionServicios(valorMensual) {
+  return {
+    salario_base: valorMensual,
+    auxilio_transporte: 0,
+    salud_empleado: 0,
+    pension_empleado: 0,
+    salud_empleador: 0,
+    pension_empleador: 0,
+    arl: 0,
+    caja_compensacion: 0,
+    icbf: 0,
+    sena: 0,
+    prima: 0,
+    cesantias: 0,
+    intereses_cesantias: 0,
+    vacaciones: 0,
+    costo_total_empleador: valorMensual,
+    neto_pagado: valorMensual,
+    exonerado: false,
+  };
 }
 
 /**
