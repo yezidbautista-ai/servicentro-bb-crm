@@ -1,56 +1,98 @@
 // core/ui.js
 //
-// Barra superior fija: logo a la derecha, usuario + cerrar sesión a la
-// izquierda del logo, y una fila de pestañas horizontales alimentada desde
-// el registro de módulos (reemplaza el drawer tipo hamburguesa).
+// Navegación de DOS niveles:
+// - Fila principal (#tabs-nav): solo las secciones de primer nivel (Ventas
+//   Diarias, Proveedores, Agenda de Pagos, Saldos y Cuentas, Contabilidad).
+// - Fila de subpestañas (#tabs-nav-sub): cambia según la sección activa —
+//   solo muestra las subpestañas de ESE módulo, nunca las de otro. Si una
+//   sección no tiene subpestañas propias, esta fila se oculta.
+//
+// El propio módulo principal aparece como el primer botón de su fila de
+// subpestañas (representa su vista "por defecto"), así que Agenda de Pagos
+// se ve, en la práctica, como: [Agenda de Pagos] → Día seleccionado | Tabla
+// completa | Indicadores de Pagos — los 4 nombres visibles pero repartidos
+// en dos filas relacionadas, no mezclados con las subpestañas de otras
+// secciones en una sola fila larga.
 
 import { getModulesForRole, getSubModulesForRole } from './modules-registry.js';
 import { renderModulo } from './router.js';
 
+let rolActual = null;
+let navPrincipal = null;
+let navSub = null;
+
 export function initTabs({ rol, nombreUsuario, onLogout }) {
-  const nav = document.getElementById('tabs-nav');
+  rolActual = rol;
+  navPrincipal = document.getElementById('tabs-nav');
+  navSub = document.getElementById('tabs-nav-sub');
+
   const nombreEl = document.getElementById('nombre-usuario-activo');
   const btnSalir = document.getElementById('btn-cerrar-sesion');
-
   if (nombreEl) nombreEl.textContent = nombreUsuario || '';
   if (btnSalir) btnSalir.addEventListener('click', onLogout);
 
-  nav.innerHTML = '';
-
-  // Cada módulo principal se pinta seguido inmediatamente de sus propias
-  // subpestañas (agrupación explícita, no depende del orden de import).
   const principales = getModulesForRole(rol);
-  const primerModuloId = principales[0]?.id;
+  navPrincipal.innerHTML = '';
 
   principales.forEach((modulo) => {
-    nav.appendChild(crearBotonPestana(modulo, rol));
-    getSubModulesForRole(modulo.id, rol).forEach((sub) => {
-      nav.appendChild(crearBotonPestana(sub, rol));
-    });
+    const tab = crearBotonPestana(modulo, () => seleccionarSeccion(modulo));
+    navPrincipal.appendChild(tab);
   });
 
-  function crearBotonPestana(modulo, rol) {
-    const tab = document.createElement('button');
-    tab.type = 'button';
-    tab.className = `tab-item ${modulo.parentId ? 'tab-item-sub' : ''}`;
-    tab.dataset.moduleId = modulo.id;
-    tab.innerHTML = `<span class="tab-icono">${modulo.icono}</span><span>${modulo.label}</span>`;
-    tab.addEventListener('click', () => {
-      renderModulo(modulo.id, rol);
-      marcarActivo(modulo.id);
-    });
-    return tab;
+  if (principales.length > 0) seleccionarSeccion(principales[0]);
+
+  return { marcarActivo: (id) => marcarActivoEnFila(navPrincipal, id) };
+}
+
+function seleccionarSeccion(modulo) {
+  renderModulo(modulo.id, rolActual);
+  marcarActivoEnFila(navPrincipal, modulo.id);
+  pintarSubNav(modulo);
+}
+
+function pintarSubNav(moduloActivo) {
+  const subs = getSubModulesForRole(moduloActivo.id, rolActual);
+
+  if (subs.length === 0) {
+    navSub.innerHTML = '';
+    navSub.classList.add('oculto');
+    return;
   }
 
-  function marcarActivo(id) {
-    nav.querySelectorAll('.tab-item').forEach((el) => {
-      el.classList.toggle('activo', el.dataset.moduleId === id);
+  navSub.classList.remove('oculto');
+  navSub.innerHTML = '';
+
+  // El módulo principal es, en la práctica, la primera "subpestaña" (su vista por defecto).
+  const propia = crearBotonPestana(moduloActivo, () => {
+    renderModulo(moduloActivo.id, rolActual);
+    marcarActivoEnFila(navSub, moduloActivo.id);
+  });
+  propia.classList.add('activo');
+  navSub.appendChild(propia);
+
+  subs.forEach((sub) => {
+    const tab = crearBotonPestana(sub, () => {
+      renderModulo(sub.id, rolActual);
+      marcarActivoEnFila(navSub, sub.id);
     });
-  }
+    navSub.appendChild(tab);
+  });
+}
 
-  if (primerModuloId) marcarActivo(primerModuloId);
+function crearBotonPestana(modulo, alHacerClic) {
+  const tab = document.createElement('button');
+  tab.type = 'button';
+  tab.className = 'tab-item';
+  tab.dataset.moduleId = modulo.id;
+  tab.innerHTML = `<span class="tab-icono">${modulo.icono}</span><span>${modulo.label}</span>`;
+  tab.addEventListener('click', alHacerClic);
+  return tab;
+}
 
-  return { marcarActivo };
+function marcarActivoEnFila(fila, id) {
+  fila.querySelectorAll('.tab-item').forEach((el) => {
+    el.classList.toggle('activo', el.dataset.moduleId === id);
+  });
 }
 
 export function mostrarToast(mensaje, tipo = 'info') {
