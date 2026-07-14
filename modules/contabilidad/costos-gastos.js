@@ -1,12 +1,18 @@
 // modules/contabilidad/costos-gastos.js
 //
 // Subpestaña "Costos y Gastos" de Contabilidad — Gastos Fijos (arriendo,
-// servicios, etc.) y Nómina, juntos en una sola pantalla. Cada gasto fijo
-// tiene una categoría contable simple (Administración/Personal/Financieros/
-// Ventas) para que el Excel exportado ya venga preclasificado para el
-// contador. Al marcar algo como pagado, se pide la cuenta de origen y se
-// descuenta automáticamente en Saldos y Cuentas (mismo patrón que Agenda de
-// Pagos).
+// servicios, etc.) y Nómina, juntos en una sola pantalla.
+//
+// Nómina soporta dos tipos de vinculación:
+// - 'empleado': vinculación legal completa (parafiscales, prestaciones, ARL
+//   Clase III = 2.436%, confirmado por el usuario).
+// - 'prestacion_servicios': contratista — solo el valor acordado, sin
+//   aportes patronales.
+// El pago es quincenal (15 y 30): cada "Liquidar" genera 2 filas en
+// nomina_pagos, cada una con su propio estado y cuenta de origen.
+//
+// Al marcar un gasto fijo o una quincena de nómina como pagado, se pide la
+// cuenta de origen y se descuenta automáticamente en Saldos y Cuentas.
 //
 // Solo administradores.
 
@@ -16,7 +22,7 @@ import { getPerfilActual } from '../../core/auth.js';
 import { formatCOP, parseCOP, formatearMientrasEscribe, activarInputMoneda } from '../../core/helpers/currency.js';
 import { hoyISO } from '../../core/helpers/dates.js';
 import { mostrarToast, mostrarConfirmacion } from '../../core/ui.js';
-import { calcularLiquidacionMensual } from '../../core/helpers/nomina-calculos.js';
+import { calcularLiquidacionMensual, calcularLiquidacionPrestacionServicios } from '../../core/helpers/nomina-calculos.js';
 
 const CATEGORIAS_CONTABLES = [
   { value: 'administracion', label: 'Gastos de Administración' },
@@ -25,11 +31,23 @@ const CATEGORIAS_CONTABLES = [
   { value: 'ventas', label: 'Gastos de Ventas' },
 ];
 
+const TIPOS_CONTRATO = [
+  { value: 'empleado', label: 'Empleado (vinculación legal)' },
+  { value: 'prestacion_servicios', label: 'Prestación de servicios' },
+];
+
 function etiquetaCategoria(valor) {
   return CATEGORIAS_CONTABLES.find((c) => c.value === valor)?.label || valor;
 }
+function etiquetaTipoContrato(valor) {
+  return TIPOS_CONTRATO.find((t) => t.value === valor)?.label || valor;
+}
 function primerDiaMes(mesISO) {
   return `${mesISO}-01`;
+}
+function ultimoDiaMes(mesISO) {
+  const [anio, mes] = mesISO.split('-').map(Number);
+  return `${mesISO}-${String(new Date(anio, mes, 0).getDate()).padStart(2, '0')}`;
 }
 
 const estado = {
@@ -37,7 +55,7 @@ const estado = {
   conceptos: [],
   registrosMes: [],
   funcionarios: [],
-  liquidacionesMes: [],
+  liquidacionesMes: [], // cada una con su arreglo .pagos (2 quincenas)
   cuentasActivas: [],
 };
 
@@ -66,7 +84,7 @@ async function cargarYRenderizar(container) {
     supabase.from('gastos_fijos_conceptos').select('*').eq('activo', true).order('nombre'),
     supabase.from('gastos_fijos_registros').select('*').eq('mes', primerDiaMes(estado.mes)),
     supabase.from('nomina_funcionarios').select('*').eq('activo', true).order('nombre'),
-    supabase.from('nomina_liquidaciones').select('*').eq('mes', primerDiaMes(estado.mes)),
+    supabase.from('nomina_liquidaciones').select('*, nomina_pagos(*)').eq('mes', primerDiaMes(estado.mes)),
     supabase.from('cuentas').select('id, nombre').eq('activa', true).order('nombre'),
   ]);
 
@@ -75,7 +93,10 @@ async function cargarYRenderizar(container) {
   estado.conceptos = conceptos || [];
   estado.registrosMes = registros || [];
   estado.funcionarios = funcionarios || [];
-  estado.liquidacionesMes = liquidaciones || [];
+  estado.liquidacionesMes = (liquidaciones || []).map((l) => ({
+    ...l,
+    pagos: (l.nomina_pagos || []).sort((a, b) => a.numero_quincena - b.numero_quincena),
+  }));
   estado.cuentasActivas = cuentas || [];
 
   pintarContenido(container);
@@ -146,7 +167,7 @@ function renderFilaConcepto(c) {
       <td>${reg ? `<span class="badge badge-${pagado ? 'pagado' : 'pendiente'}">${pagado ? 'Pagado' : 'Guardado'}</span>` : '<span class="mensaje-vacio">Sin guardar</span>'}</td>
       <td>
         ${!pagado ? `<button type="button" class="btn-editar-salida btn-guardar-gasto" data-concepto="${c.id}">Guardar</button>` : ''}
-        ${reg && !pagado ? `<button type="button" class="btn-editar-salida btn-pagar-gasto" data-id="${reg.id}" data-tipo="gasto_fijo">Marcar pagado</button>` : ''}
+        ${reg && !pagado ? `<button type="button" class="btn-editar-salida btn-pagar-gasto" data-id="${reg.id}">Marcar pagado</button>` : ''}
       </td>
     </tr>
   `;
@@ -161,15 +182,15 @@ function renderNomina() {
     <section class="tarjeta">
       <h3>Nómina — ${estado.mes}</h3>
       <table class="tabla-simple">
-        <thead><tr><th>Funcionario</th><th>Salario básico</th><th>Costo total empleador</th><th>Neto a pagar</th><th>Estado</th><th></th></tr></thead>
+        <thead><tr><th>Funcionario</th><th>Tipo</th><th>Valor mensual</th><th>Costo total</th><th>Quincena 1 (15)</th><th>Quincena 2 (30)</th><th></th></tr></thead>
         <tbody>
           ${
             estado.funcionarios.length
               ? estado.funcionarios.map((f) => renderFilaFuncionario(f)).join('')
-              : '<tr><td colspan="6" class="mensaje-vacio">Sin funcionarios registrados todavía.</td></tr>'
+              : '<tr><td colspan="7" class="mensaje-vacio">Sin funcionarios registrados todavía.</td></tr>'
           }
           <tr class="fila-total">
-            <td colspan="2">Total costo de nómina del mes</td>
+            <td colspan="3">Total costo de nómina del mes</td>
             <td class="monto total-salidas">${formatCOP(totalCosto)}</td>
             <td colspan="3"></td>
           </tr>
@@ -184,20 +205,33 @@ function renderNomina() {
 
 function renderFilaFuncionario(f) {
   const liq = estado.liquidacionesMes.find((l) => l.funcionario_id === f.id);
-  const pagada = liq?.pagada;
+  const q1 = liq?.pagos.find((p) => p.numero_quincena === 1);
+  const q2 = liq?.pagos.find((p) => p.numero_quincena === 2);
+
   return `
     <tr>
       <td>${f.nombre}</td>
+      <td>${etiquetaTipoContrato(f.tipo_contrato)}</td>
       <td class="monto">${formatCOP(f.salario_basico)}</td>
       <td class="monto">${liq ? formatCOP(liq.costo_total_empleador) : '—'}</td>
-      <td class="monto">${liq ? formatCOP(liq.neto_pagado) : '—'}</td>
-      <td>${liq ? `<span class="badge badge-${pagada ? 'pagado' : 'pendiente'}">${pagada ? 'Pagada' : 'Liquidada'}</span>` : '<span class="mensaje-vacio">Sin liquidar</span>'}</td>
+      <td>${renderCeldaQuincena(q1)}</td>
+      <td>${renderCeldaQuincena(q2)}</td>
       <td>
         ${!liq ? `<button type="button" class="btn-editar-salida btn-liquidar" data-id="${f.id}">Liquidar</button>` : ''}
-        ${liq && !pagada ? `<button type="button" class="btn-editar-salida btn-pagar-gasto" data-id="${liq.id}" data-tipo="nomina">Marcar pagada</button>` : ''}
         <button type="button" class="btn-editar-salida btn-editar-funcionario" data-id="${f.id}">Editar</button>
       </td>
     </tr>
+  `;
+}
+
+function renderCeldaQuincena(pago) {
+  if (!pago) return '<span class="mensaje-vacio">—</span>';
+  if (pago.pagado) {
+    return `<span class="badge badge-pagado">${formatCOP(pago.valor)}</span>`;
+  }
+  return `
+    <span class="monto">${formatCOP(pago.valor)}</span>
+    <button type="button" class="btn-editar-salida btn-pagar-quincena" data-id="${pago.id}">Pagar</button>
   `;
 }
 
@@ -256,7 +290,13 @@ function abrirModalFuncionario(container, id) {
       <label>Nombre * <input type="text" class="nf-nombre" required value="${f?.nombre || ''}" /></label>
       <label>Cédula * <input type="text" class="nf-cedula" required value="${f?.cedula || ''}" /></label>
       <label>
-        Salario básico *
+        Tipo de vinculación *
+        <select class="nf-tipo-contrato" required>
+          ${TIPOS_CONTRATO.map((t) => `<option value="${t.value}" ${f?.tipo_contrato === t.value ? 'selected' : ''}>${t.label}</option>`).join('')}
+        </select>
+      </label>
+      <label>
+        ${f?.tipo_contrato === 'prestacion_servicios' ? 'Valor mensual acordado *' : 'Salario básico *'}
         <div class="input-moneda">
           <span class="prefijo">$</span>
           <input type="text" inputmode="numeric" placeholder="0" class="nf-salario" required value="${f ? formatearMientrasEscribe(String(f.salario_basico)) : ''}" />
@@ -277,13 +317,14 @@ function abrirModalFuncionario(container, id) {
     if (e) e.preventDefault();
     const nombre = form.querySelector('.nf-nombre').value.trim();
     const cedula = form.querySelector('.nf-cedula').value.trim();
+    const tipo_contrato = form.querySelector('.nf-tipo-contrato').value;
     const salario_basico = parseCOP(form.querySelector('.nf-salario').value);
     const fecha_ingreso = form.querySelector('.nf-fecha-ingreso').value;
     if (!nombre || !cedula || salario_basico <= 0 || !fecha_ingreso) {
       mostrarToast('Todos los campos son obligatorios.', 'error');
       return;
     }
-    const payload = { nombre, cedula, salario_basico, fecha_ingreso };
+    const payload = { nombre, cedula, tipo_contrato, salario_basico, fecha_ingreso };
     let error;
     if (editando) ({ error } = await supabase.from('nomina_funcionarios').update(payload).eq('id', id));
     else ({ error } = await supabase.from('nomina_funcionarios').insert(payload));
@@ -299,11 +340,19 @@ function abrirModalFuncionario(container, id) {
   };
   form.addEventListener('submit', enviar);
   overlay.querySelector('.btn-modal-guardar-funcionario').addEventListener('click', enviar);
+
+  // Cambia la etiqueta del campo de valor según el tipo de vinculación elegido.
+  const selectTipo = overlay.querySelector('.nf-tipo-contrato');
+  const labelValor = overlay.querySelector('.nf-salario').closest('label');
+  selectTipo.addEventListener('change', (e) => {
+    labelValor.firstChild.textContent =
+      e.target.value === 'prestacion_servicios' ? 'Valor mensual acordado *' : 'Salario básico *';
+  });
 }
 
-function abrirModalMarcarPagado(container, id, tipo) {
+function abrirModalMarcarPagado(container, { titulo, onConfirmar }) {
   const contenido = `
-    <h3>Marcar como pagado</h3>
+    <h3>${titulo}</h3>
     <form class="form-pagar-modal form-grid">
       <label>Fecha de pago * <input type="date" class="pg2-fecha" required value="${hoyISO()}" /></label>
       <label>
@@ -325,7 +374,6 @@ function abrirModalMarcarPagado(container, id, tipo) {
 
   const enviar = async (e) => {
     if (e) e.preventDefault();
-    const perfil = getPerfilActual();
     const fecha_pago = form.querySelector('.pg2-fecha').value;
     const cuenta_id = form.querySelector('.pg2-cuenta').value;
     if (!fecha_pago || !cuenta_id) { mostrarToast('Fecha y cuenta son obligatorias.', 'error'); return; }
@@ -337,21 +385,8 @@ function abrirModalMarcarPagado(container, id, tipo) {
     });
     if (!confirmado) return;
 
-    const tabla = tipo === 'nomina' ? 'nomina_liquidaciones' : 'gastos_fijos_registros';
-    const payload =
-      tipo === 'nomina'
-        ? { pagada: true, fecha_pago, cuenta_id, pagado_por: perfil?.id }
-        : { pagado: true, fecha_pago, cuenta_id };
-
-    const { error } = await supabase.from(tabla).update(payload).eq('id', id);
-    if (error) {
-      console.error(error);
-      mostrarToast(`No se pudo confirmar: ${error.message}`, 'error');
-      return;
-    }
-    mostrarToast('Pago confirmado.', 'exito');
-    overlay.remove();
-    await cargarYRenderizar(container);
+    const exito = await onConfirmar({ fecha_pago, cuenta_id });
+    if (exito) overlay.remove();
   };
   form.addEventListener('submit', enviar);
   overlay.querySelector('.btn-modal-confirmar-pagar').addEventListener('click', enviar);
@@ -382,7 +417,23 @@ function enlazarEventos(container) {
   });
 
   container.querySelectorAll('.btn-pagar-gasto').forEach((btn) => {
-    btn.addEventListener('click', () => abrirModalMarcarPagado(container, btn.dataset.id, btn.dataset.tipo));
+    const registroId = btn.dataset.id;
+    btn.addEventListener('click', () => {
+      abrirModalMarcarPagado(container, {
+        titulo: 'Marcar gasto fijo como pagado',
+        onConfirmar: ({ fecha_pago, cuenta_id }) => pagarGastoFijo(container, registroId, fecha_pago, cuenta_id),
+      });
+    });
+  });
+
+  container.querySelectorAll('.btn-pagar-quincena').forEach((btn) => {
+    const pagoId = btn.dataset.id;
+    btn.addEventListener('click', () => {
+      abrirModalMarcarPagado(container, {
+        titulo: 'Marcar quincena de nómina como pagada',
+        onConfirmar: ({ fecha_pago, cuenta_id }) => pagarQuincena(container, pagoId, fecha_pago, cuenta_id),
+      });
+    });
   });
 }
 
@@ -406,35 +457,81 @@ async function guardarGastoFijo(container, conceptoId) {
   await cargarYRenderizar(container);
 }
 
+async function pagarGastoFijo(container, registroId, fecha_pago, cuenta_id) {
+  const { error } = await supabase.from('gastos_fijos_registros').update({ pagado: true, fecha_pago, cuenta_id }).eq('id', registroId);
+  if (error) {
+    console.error(error);
+    mostrarToast(`No se pudo confirmar: ${error.message}`, 'error');
+    return false;
+  }
+  mostrarToast('Pago confirmado.', 'exito');
+  await cargarYRenderizar(container);
+  return true;
+}
+
 async function liquidarNomina(container, funcionarioId) {
   const f = estado.funcionarios.find((x) => x.id === funcionarioId);
   if (!f) return;
 
   let liquidacion;
-  try {
-    liquidacion = calcularLiquidacionMensual(Number(f.salario_basico));
-  } catch (err) {
-    mostrarToast(
-      'No se puede liquidar todavía: falta confirmar la clase de riesgo ARL con el contador (core/helpers/nomina-calculos.js).',
-      'error'
-    );
-    console.error(err);
-    return;
+  if (f.tipo_contrato === 'prestacion_servicios') {
+    liquidacion = calcularLiquidacionPrestacionServicios(Number(f.salario_basico));
+  } else {
+    try {
+      liquidacion = calcularLiquidacionMensual(Number(f.salario_basico));
+    } catch (err) {
+      mostrarToast(
+        'No se puede liquidar todavía: falta confirmar la clase de riesgo ARL con el contador (core/helpers/nomina-calculos.js).',
+        'error'
+      );
+      console.error(err);
+      return;
+    }
   }
 
-  const { error } = await supabase.from('nomina_liquidaciones').insert({
-    funcionario_id: funcionarioId,
-    mes: primerDiaMes(estado.mes),
-    ...liquidacion,
-  });
+  const { data: liqCreada, error } = await supabase
+    .from('nomina_liquidaciones')
+    .insert({ funcionario_id: funcionarioId, mes: primerDiaMes(estado.mes), ...liquidacion })
+    .select()
+    .single();
 
   if (error) {
     console.error(error);
     mostrarToast(`No se pudo liquidar: ${error.message}`, 'error');
     return;
   }
-  mostrarToast('Nómina liquidada.', 'exito');
+
+  // Genera las 2 quincenas automáticamente (15 y 30/31), cada una por la mitad del neto.
+  const mitad = Number(liqCreada.neto_pagado) / 2;
+  const { error: errorPagos } = await supabase.from('nomina_pagos').insert([
+    { liquidacion_id: liqCreada.id, numero_quincena: 1, fecha_programada: `${estado.mes}-15`, valor: mitad },
+    { liquidacion_id: liqCreada.id, numero_quincena: 2, fecha_programada: ultimoDiaMes(estado.mes), valor: mitad },
+  ]);
+
+  if (errorPagos) {
+    console.error(errorPagos);
+    mostrarToast(`Liquidado, pero no se pudieron crear las quincenas: ${errorPagos.message}`, 'error');
+  } else {
+    mostrarToast('Nómina liquidada en 2 quincenas.', 'exito');
+  }
   await cargarYRenderizar(container);
+}
+
+async function pagarQuincena(container, pagoId, fecha_pago, cuenta_id) {
+  const perfil = getPerfilActual();
+  const { error } = await supabase
+    .from('nomina_pagos')
+    .update({ pagado: true, fecha_pago, cuenta_id, pagado_por: perfil?.id, pagado_at: new Date().toISOString() })
+    .eq('id', pagoId);
+
+  if (error) {
+    console.error(error);
+    mostrarToast(`No se pudo confirmar: ${error.message}`, 'error');
+    return false;
+  }
+  mostrarToast('Quincena pagada.', 'exito');
+  await cargarYRenderizar(container);
+  return true;
 }
 
 registerModule({
