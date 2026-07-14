@@ -210,17 +210,22 @@ h3 {
   font-weight: 600;
 }
 
-.tab-item-sub {
-  padding-left: 1.5rem;
-  font-size: 0.85rem;
-  position: relative;
+/* Segunda fila: subpestañas de la sección activa (cambia según en qué
+   módulo principal estés — nunca mezcla subpestañas de otras secciones). */
+.tabs-nav-sub {
+  background: var(--color-fondo);
+  border-top: none;
+  padding: 0 1.5rem;
 }
 
-.tab-item-sub::before {
-  content: '↳';
-  position: absolute;
-  left: 0.4rem;
-  color: var(--color-borde);
+.tabs-nav-sub .tab-item {
+  padding: 0.55rem 0.9rem;
+  font-size: 0.82rem;
+}
+
+.tabs-nav-sub .tab-item.activo {
+  border-bottom-color: var(--color-verde);
+  color: var(--color-verde-oscuro);
 }
 
 .tab-icono { font-size: 1rem; }
