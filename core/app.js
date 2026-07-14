@@ -22,9 +22,10 @@ import '../modules/pagos-proveedores/agenda-pagos.js';
 import '../modules/pagos-proveedores/tabla-pagos.js';
 import '../modules/pagos-proveedores/indicadores-pagos.js';
 import '../modules/saldos/saldos.js';
-import '../modules/gastos-fijos/gastos-fijos.js';
-import '../modules/gastos-fijos/nomina.js';
 import '../modules/contabilidad/contabilidad.js';
+import '../modules/contabilidad/costos-gastos.js';
+import '../modules/contabilidad/cuentas-por-pagar.js';
+import '../modules/contabilidad/utilidad.js';
 
 let inicializando = false;
 
