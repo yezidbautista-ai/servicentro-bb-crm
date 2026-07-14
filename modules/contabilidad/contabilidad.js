@@ -43,23 +43,23 @@ async function cargarYRenderizar(container) {
     supabase.from('ventas_diarias_totales').select('total_venta_diaria').eq('enviado', true).gte('fecha', desde).lte('fecha', hasta),
     supabase.from('proveedores_pagos').select('valor_pagado').eq('estado', 'pagado').gte('fecha_pago', desde).lte('fecha_pago', hasta),
     supabase.from('gastos_fijos_registros').select('valor').eq('pagado', true).gte('fecha_pago', desde).lte('fecha_pago', hasta),
-    supabase.from('nomina_liquidaciones').select('costo_total_empleador').eq('pagada', true).gte('fecha_pago', desde).lte('fecha_pago', hasta),
+    supabase.from('nomina_pagos').select('valor').eq('pagado', true).gte('fecha_pago', desde).lte('fecha_pago', hasta),
     supabase.from('proveedores_pagos').select('valor').neq('estado', 'pagado'),
     supabase.from('gastos_fijos_registros').select('valor').eq('pagado', false),
-    supabase.from('nomina_liquidaciones').select('neto_pagado').eq('pagada', false),
+    supabase.from('nomina_pagos').select('valor').eq('pagado', false),
   ]);
 
   const ingresos = (ventas || []).reduce((acc, v) => acc + Number(v.total_venta_diaria || 0), 0);
   const egresos =
     (pagosProv || []).reduce((acc, p) => acc + Number(p.valor_pagado || 0), 0) +
     (gastosFijos || []).reduce((acc, g) => acc + Number(g.valor || 0), 0) +
-    (nomina || []).reduce((acc, n) => acc + Number(n.costo_total_empleador || 0), 0);
+    (nomina || []).reduce((acc, n) => acc + Number(n.valor || 0), 0);
   const utilidad = ingresos - egresos;
 
   const totalPendiente =
     (pendientesProv || []).reduce((acc, p) => acc + Number(p.valor || 0), 0) +
     (pendientesGastos || []).reduce((acc, g) => acc + Number(g.valor || 0), 0) +
-    (pendientesNomina || []).reduce((acc, n) => acc + Number(n.neto_pagado || 0), 0);
+    (pendientesNomina || []).reduce((acc, n) => acc + Number(n.valor || 0), 0);
 
   contenido.innerHTML = `
     <div class="grid-dos-columnas">
