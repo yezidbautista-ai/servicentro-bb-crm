@@ -11,7 +11,7 @@ import {
   cerrarSesion,
   suscribirseACambiosDeSesion,
 } from './auth.js';
-import { initRouter, renderPrimerModuloDisponible } from './router.js';
+import { initRouter } from './router.js';
 import { initTabs } from './ui.js';
 
 // --- Registro de módulos (agregar aquí cada módulo nuevo) ---
@@ -59,7 +59,6 @@ function mostrarApp(perfil) {
     nombreUsuario: perfil.nombre,
     onLogout: cerrarSesion,
   });
-  renderPrimerModuloDisponible(perfil.rol);
 }
 
 document.getElementById('btn-login-google').addEventListener('click', iniciarSesionGoogle);
