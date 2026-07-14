@@ -52,7 +52,10 @@ async function cargarYRenderizar(container) {
       .from('gastos_fijos_registros')
       .select('*, gastos_fijos_conceptos(nombre)')
       .eq('pagado', false),
-    supabase.from('nomina_liquidaciones').select('*, nomina_funcionarios(nombre)').eq('pagada', false),
+    supabase
+      .from('nomina_pagos')
+      .select('*, nomina_liquidaciones(mes, nomina_funcionarios(nombre))')
+      .eq('pagado', false),
   ]);
 
   [e1, e2, e3].forEach((e) => e && console.error('Error cargando Cuentas por Pagar:', e));
@@ -84,10 +87,10 @@ async function cargarYRenderizar(container) {
   (nomina || []).forEach((n) => {
     pendientes.push({
       tipo: 'nomina',
-      tipoLabel: 'Nómina',
-      nombre: n.nomina_funcionarios?.nombre || '—',
-      valor: n.neto_pagado,
-      fecha: n.mes,
+      tipoLabel: `Nómina (Q${n.numero_quincena})`,
+      nombre: n.nomina_liquidaciones?.nomina_funcionarios?.nombre || '—',
+      valor: n.valor,
+      fecha: n.fecha_programada,
       estado: 'pendiente',
     });
   });
