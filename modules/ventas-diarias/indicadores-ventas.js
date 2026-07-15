@@ -310,6 +310,7 @@ function renderTablaDiaria() {
               <th>Día</th>
               <th>Efectivo</th><th>Datáfono</th><th>Nequi</th><th>Daviplata</th>
               <th>Bancolombia</th><th>Banco de Bogotá</th>
+              <th>Total Venta del Día</th>
               <th>Salidas</th><th>Total neto</th>
             </tr>
           </thead>
@@ -327,8 +328,9 @@ function renderTablaDiaria() {
                 <td class="monto">${formatCOP(d.daviplata)}</td>
                 <td class="monto">${formatCOP(d.bancolombia)}</td>
                 <td class="monto">${formatCOP(d.bancodebogota)}</td>
+                <td class="monto monto-total-dia">${formatCOP(entradas)}</td>
                 <td class="monto monto-salida">${formatCOP(d.salidas)}</td>
-                <td class="monto">${formatCOP(neto)}</td>
+                <td class="monto monto-neto-verde">${formatCOP(neto)}</td>
               </tr>`;
               })
               .join('')}
@@ -340,8 +342,11 @@ function renderTablaDiaria() {
               <td class="monto">${formatCOP(sum('daviplata'))}</td>
               <td class="monto">${formatCOP(sum('bancolombia'))}</td>
               <td class="monto">${formatCOP(sum('bancodebogota'))}</td>
+              <td class="monto monto-total-dia">${formatCOP(
+                sum('efectivo') + sum('datafono') + sum('nequi') + sum('daviplata') + sum('bancolombia') + sum('bancodebogota')
+              )}</td>
               <td class="monto monto-salida">${formatCOP(sum('salidas'))}</td>
-              <td class="monto">${formatCOP(
+              <td class="monto monto-neto-verde">${formatCOP(
                 sum('efectivo') + sum('datafono') + sum('nequi') + sum('daviplata') + sum('bancolombia') + sum('bancodebogota') - sum('salidas')
               )}</td>
             </tr>
@@ -466,6 +471,7 @@ async function exportarTablaDiaria() {
         Daviplata: daviplata,
         Bancolombia: bancolombia,
         'Banco de Bogotá': bancodebogota,
+        'Total Venta del Día': entradas,
         Salidas: salidas,
         'Total neto': entradas - salidas,
       });
