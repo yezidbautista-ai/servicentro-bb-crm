@@ -83,11 +83,60 @@ function pintarContenido(container) {
 
   contenido.innerHTML = `
     ${renderTarjetaCuentas()}
+    ${renderTarjetaTransferencias()}
     ${renderTarjetaMovimientos()}
   `;
 
   enlazarEventos(container);
   container.querySelectorAll('.input-moneda input').forEach(activarInputMoneda);
+}
+
+function transferenciasAgrupadas() {
+  const internas = estado.movimientos.filter((m) => m.origen_tipo === 'transferencia_interna');
+  const grupos = {};
+
+  internas.forEach((m) => {
+    const base = m.concepto.replace(/ \((salida|entrada)\)$/, '');
+    const clave = `${base}__${m.fecha}__${Math.abs(m.valor)}`;
+    if (!grupos[clave]) {
+      grupos[clave] = { concepto: base, fecha: m.fecha, monto: Math.abs(m.valor), desde: null, hacia: null };
+    }
+    if (Number(m.valor) < 0) grupos[clave].desde = m.cuentas?.nombre || '—';
+    else grupos[clave].hacia = m.cuentas?.nombre || '—';
+  });
+
+  return Object.values(grupos).sort((a, b) => b.fecha.localeCompare(a.fecha));
+}
+
+function renderTarjetaTransferencias() {
+  const lista = transferenciasAgrupadas();
+
+  return `
+    <section class="tarjeta">
+      <h3>Movimientos entre Cuentas</h3>
+      <table class="tabla-simple">
+        <thead><tr><th>Fecha</th><th>Detalle</th><th>Desde</th><th>Hacia</th><th>Monto</th></tr></thead>
+        <tbody>
+          ${
+            lista.length
+              ? lista
+                  .map(
+                    (t) => `
+              <tr>
+                <td>${t.fecha}</td>
+                <td>${t.concepto}</td>
+                <td>${t.desde || '—'}</td>
+                <td>${t.hacia || '—'}</td>
+                <td class="monto">${formatCOP(t.monto)}</td>
+              </tr>`
+                  )
+                  .join('')
+              : '<tr><td colspan="5" class="mensaje-vacio">Sin transferencias entre cuentas todavía.</td></tr>'
+          }
+        </tbody>
+      </table>
+    </section>
+  `;
 }
 
 function renderTarjetaCuentas() {
