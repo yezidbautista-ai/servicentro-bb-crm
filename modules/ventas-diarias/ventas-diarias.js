@@ -63,6 +63,7 @@ const estado = {
   ventaDiaria: null,
   salidas: [],
   pagosDiarios: [],
+  cuentasActivas: [],
   modoEdicionIngresos: false,
   modoEdicionSalidas: false,
 };
@@ -82,7 +83,7 @@ async function render(container) {
   estado.modoEdicionSalidas = false;
 
   container.innerHTML = `
-    <h2>Ventas Diarias</h2>
+    <h2>Registro Diario</h2>
     ${esAdmin() ? renderControlesAdmin() : renderFechaFija()}
     <div id="ventas-diarias-contenido">Cargando…</div>
   `;
@@ -176,6 +177,16 @@ async function cargarYRenderizar(container) {
   if (errorPagos) console.error('Error cargando proveedores_pagos:', errorPagos);
   estado.pagosDiarios = pagos || [];
 
+  if (esAdmin()) {
+    const { data: cuentas, error: errorCuentas } = await supabase
+      .from('cuentas')
+      .select('id, nombre')
+      .eq('activa', true)
+      .order('nombre', { ascending: true });
+    if (errorCuentas) console.error('Error cargando cuentas activas:', errorCuentas);
+    estado.cuentasActivas = cuentas || [];
+  }
+
   pintarContenido(container);
 }
 
@@ -192,11 +203,24 @@ function pintarContenido(container) {
     </div>
     ${v ? renderTotales() : ''}
     ${renderPagosDiarios()}
+    ${esAdmin() ? renderTransferenciaCuentas() : ''}
     ${v ? renderAccionesFinales() : ''}
   `;
 
   enlazarEventos(container);
   container.querySelectorAll('.input-moneda input').forEach(activarInputMoneda);
+}
+
+function renderTransferenciaCuentas() {
+  return `
+    <section class="tarjeta">
+      <h3>Movimientos entre cuentas</h3>
+      <p class="mensaje-vacio">Para mover dinero de una cuenta a otra (ej. retirar de Nequi a Bancolombia) — mismo efecto que en Saldos y Cuentas.</p>
+      <div class="acciones-tarjeta">
+        <button type="button" id="btn-transferir-cuentas" class="btn btn-azul">⇄ Transferir entre cuentas</button>
+      </div>
+    </section>
+  `;
 }
 
 function renderEtiquetaEnviado(v) {
@@ -509,6 +533,9 @@ function enlazarEventos(container) {
     });
   });
 
+  const btnTransferir = container.querySelector('#btn-transferir-cuentas');
+  if (btnTransferir) btnTransferir.addEventListener('click', () => abrirModalTransferencia(container));
+
   const btnEnviar = container.querySelector('#btn-enviar-dia');
   if (btnEnviar) btnEnviar.addEventListener('click', () => enviarDia(container));
 
@@ -808,9 +835,98 @@ async function exportarExcel() {
   }
 }
 
+function abrirModalTransferencia(container) {
+  const contenido = `
+    <h3>Transferir entre cuentas propias</h3>
+    <form class="form-transferencia-modal form-grid">
+      <label>
+        Desde *
+        <select class="tr-desde" required>
+          <option value="">— Seleccionar —</option>
+          ${estado.cuentasActivas.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join('')}
+        </select>
+      </label>
+      <label>
+        Hacia *
+        <select class="tr-hasta" required>
+          <option value="">— Seleccionar —</option>
+          ${estado.cuentasActivas.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join('')}
+        </select>
+      </label>
+      <label>Fecha * <input type="date" class="tr-fecha" required value="${hoyISO()}" /></label>
+      <label>
+        Monto *
+        <div class="input-moneda">
+          <span class="prefijo">$</span>
+          <input type="text" inputmode="numeric" placeholder="0" class="tr-monto" required />
+        </div>
+      </label>
+      <label>Concepto <input type="text" class="tr-concepto" placeholder="Ej. Retiro de Nequi a Bancolombia" /></label>
+    </form>
+    <div class="acciones-tarjeta">
+      <button type="button" class="btn btn-primario btn-modal-guardar-transferencia">Confirmar transferencia</button>
+      <button type="button" class="btn btn-secundario btn-modal-cancelar-transferencia">Cancelar</button>
+    </div>
+  `;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `<div class="modal-caja">${contenido}</div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.querySelectorAll('.input-moneda input').forEach(activarInputMoneda);
+
+  const form = overlay.querySelector('.form-transferencia-modal');
+  overlay.querySelector('.btn-modal-cancelar-transferencia').addEventListener('click', () => overlay.remove());
+
+  const enviar = async (e) => {
+    if (e) e.preventDefault();
+    const exito = await guardarTransferenciaCuentas(form);
+    if (exito) overlay.remove();
+  };
+  form.addEventListener('submit', enviar);
+  overlay.querySelector('.btn-modal-guardar-transferencia').addEventListener('click', enviar);
+}
+
+async function guardarTransferenciaCuentas(form) {
+  const perfil = getPerfilActual();
+  const cuentaDesde = form.querySelector('.tr-desde').value;
+  const cuentaHasta = form.querySelector('.tr-hasta').value;
+  const fecha = form.querySelector('.tr-fecha').value;
+  const monto = parseCOP(form.querySelector('.tr-monto').value);
+  const conceptoBase = form.querySelector('.tr-concepto').value.trim();
+
+  if (!cuentaDesde || !cuentaHasta || !fecha || monto <= 0) {
+    mostrarToast('Todos los campos son obligatorios.', 'error');
+    return false;
+  }
+  if (cuentaDesde === cuentaHasta) {
+    mostrarToast('La cuenta de origen y destino no pueden ser la misma.', 'error');
+    return false;
+  }
+
+  const nombreDesde = estado.cuentasActivas.find((c) => c.id === cuentaDesde)?.nombre || '';
+  const nombreHasta = estado.cuentasActivas.find((c) => c.id === cuentaHasta)?.nombre || '';
+  const concepto = conceptoBase || `Transferencia ${nombreDesde} → ${nombreHasta}`;
+
+  const { error } = await supabase.from('movimientos_cuenta').insert([
+    { cuenta_id: cuentaDesde, fecha, valor: -monto, concepto: `${concepto} (salida)`, origen_tipo: 'transferencia_interna', created_by: perfil?.id },
+    { cuenta_id: cuentaHasta, fecha, valor: monto, concepto: `${concepto} (entrada)`, origen_tipo: 'transferencia_interna', created_by: perfil?.id },
+  ]);
+
+  if (error) {
+    console.error('Error guardando transferencia:', error);
+    mostrarToast(`No se pudo guardar: ${error.message}`, 'error');
+    return false;
+  }
+
+  mostrarToast('Transferencia registrada.', 'exito');
+  return true;
+}
+
 registerModule({
   id: 'ventas-diarias',
-  label: 'Ventas Diarias',
+  label: 'Registro Diario',
   icono: '💰',
   roles: ['admin', 'operativo'],
   render,
