@@ -22,10 +22,40 @@ const METODOS = [
   { campo: 'ventas_transferencia_bancodebogota', label: 'Transferencia Banco de Bogotá' },
 ];
 
+const AÑOS = [2026, 2027, 2028];
+
+const PERIODOS = [
+  { value: '1', label: 'Enero', mesInicio: 1, mesFin: 1 },
+  { value: '2', label: 'Febrero', mesInicio: 2, mesFin: 2 },
+  { value: '3', label: 'Marzo', mesInicio: 3, mesFin: 3 },
+  { value: '4', label: 'Abril', mesInicio: 4, mesFin: 4 },
+  { value: '5', label: 'Mayo', mesInicio: 5, mesFin: 5 },
+  { value: '6', label: 'Junio', mesInicio: 6, mesFin: 6 },
+  { value: '7', label: 'Julio', mesInicio: 7, mesFin: 7 },
+  { value: '8', label: 'Agosto', mesInicio: 8, mesFin: 8 },
+  { value: '9', label: 'Septiembre', mesInicio: 9, mesFin: 9 },
+  { value: '10', label: 'Octubre', mesInicio: 10, mesFin: 10 },
+  { value: '11', label: 'Noviembre', mesInicio: 11, mesFin: 11 },
+  { value: '12', label: 'Diciembre', mesInicio: 12, mesFin: 12 },
+  { value: 'q1', label: 'Q1 (Ene-Mar)', mesInicio: 1, mesFin: 3 },
+  { value: 'q2', label: 'Q2 (Abr-Jun)', mesInicio: 4, mesFin: 6 },
+  { value: 'q3', label: 'Q3 (Jul-Sep)', mesInicio: 7, mesFin: 9 },
+  { value: 'q4', label: 'Q4 (Oct-Dic)', mesInicio: 10, mesFin: 12 },
+  { value: 's1', label: 'Semestre 1', mesInicio: 1, mesFin: 6 },
+  { value: 's2', label: 'Semestre 2', mesInicio: 7, mesFin: 12 },
+  { value: 'anio', label: 'Año completo', mesInicio: 1, mesFin: 12 },
+];
+
+function ultimoDiaDeMes(anio, mes) {
+  return new Date(anio, mes, 0).getDate();
+}
+
 const estado = {
   todasLasFilas: [],
   desde: '',
   hasta: '',
+  anioSeleccionado: new Date().getFullYear(),
+  periodoSeleccionado: String(new Date().getMonth() + 1),
 };
 
 function primerDiaMesActualISO() {
@@ -85,6 +115,7 @@ function pintarContenido(container) {
     ${estado.todasLasFilas.length > 0 ? renderDiasPendientes() : ''}
     ${estado.todasLasFilas.length > 0 ? renderDesglose() : ''}
     ${estado.todasLasFilas.length > 0 ? renderCierreNeto() : ''}
+    ${estado.todasLasFilas.length > 0 ? renderTablaDiaria() : ''}
     ${estado.todasLasFilas.length > 0 ? renderComparativoMensual() : ''}
   `;
 
@@ -115,11 +146,25 @@ function renderFiltros() {
   return `
     <section class="tarjeta">
       <div class="controles-fecha">
+        <label>
+          Año
+          <select id="filtro-anio">
+            ${AÑOS.map((a) => `<option value="${a}" ${estado.anioSeleccionado === a ? 'selected' : ''}>${a}</option>`).join('')}
+          </select>
+        </label>
+        <label>
+          Período
+          <select id="filtro-periodo">
+            ${PERIODOS.map((p) => `<option value="${p.value}" ${estado.periodoSeleccionado === p.value ? 'selected' : ''}>${p.label}</option>`).join('')}
+          </select>
+        </label>
+      </div>
+      <div class="controles-fecha">
         <label>Desde <input type="date" id="filtro-desde" value="${estado.desde}" /></label>
         <label>Hasta <input type="date" id="filtro-hasta" value="${estado.hasta}" /></label>
       </div>
       <div class="acciones-tarjeta">
-        <button type="button" id="btn-exportar-indicadores" class="btn btn-exportar">Exportar Excel</button>
+        <button type="button" id="btn-exportar-indicadores" class="btn btn-exportar">Exportar Excel (resumen)</button>
       </div>
     </section>
   `;
@@ -230,7 +275,103 @@ function renderComparativoMensual() {
   `;
 }
 
+function renderTablaDiaria() {
+  const dias = [];
+  const [anioD, mesD, diaD] = estado.desde.split('-').map(Number);
+  const [anioH, mesH, diaH] = estado.hasta.split('-').map(Number);
+  let cursor = new Date(anioD, mesD - 1, diaD);
+  const fin = new Date(anioH, mesH - 1, diaH);
+
+  while (cursor <= fin) {
+    const fechaISO = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
+    const fila = estado.todasLasFilas.find((f) => f.fecha === fechaISO);
+    dias.push({
+      fecha: fechaISO,
+      efectivo: Number(fila?.ventas_efectivo || 0),
+      datafono: Number(fila?.ventas_datafono || 0),
+      nequi: Number(fila?.ventas_nequi || 0),
+      daviplata: Number(fila?.ventas_daviplata || 0),
+      bancolombia: Number(fila?.ventas_transferencia_bancolombia || 0),
+      bancodebogota: Number(fila?.ventas_transferencia_bancodebogota || 0),
+      salidas: Number(fila?.salidas_efectivo || 0) + Number(fila?.salidas_digital || 0),
+    });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  const sum = (campo) => dias.reduce((acc, d) => acc + d[campo], 0);
+
+  return `
+    <section class="tarjeta">
+      <h3>Listado diario — ${estado.desde} a ${estado.hasta}</h3>
+      <div class="tabla-scroll">
+        <table class="tabla-simple">
+          <thead>
+            <tr>
+              <th>Día</th>
+              <th>Efectivo</th><th>Datáfono</th><th>Nequi</th><th>Daviplata</th>
+              <th>Bancolombia</th><th>Banco de Bogotá</th>
+              <th>Salidas</th><th>Total neto</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${dias
+              .map((d) => {
+                const entradas = d.efectivo + d.datafono + d.nequi + d.daviplata + d.bancolombia + d.bancodebogota;
+                const neto = entradas - d.salidas;
+                return `
+              <tr>
+                <td>${d.fecha}</td>
+                <td class="monto">${formatCOP(d.efectivo)}</td>
+                <td class="monto">${formatCOP(d.datafono)}</td>
+                <td class="monto">${formatCOP(d.nequi)}</td>
+                <td class="monto">${formatCOP(d.daviplata)}</td>
+                <td class="monto">${formatCOP(d.bancolombia)}</td>
+                <td class="monto">${formatCOP(d.bancodebogota)}</td>
+                <td class="monto monto-salida">${formatCOP(d.salidas)}</td>
+                <td class="monto">${formatCOP(neto)}</td>
+              </tr>`;
+              })
+              .join('')}
+            <tr class="fila-total">
+              <td>Total</td>
+              <td class="monto">${formatCOP(sum('efectivo'))}</td>
+              <td class="monto">${formatCOP(sum('datafono'))}</td>
+              <td class="monto">${formatCOP(sum('nequi'))}</td>
+              <td class="monto">${formatCOP(sum('daviplata'))}</td>
+              <td class="monto">${formatCOP(sum('bancolombia'))}</td>
+              <td class="monto">${formatCOP(sum('bancodebogota'))}</td>
+              <td class="monto monto-salida">${formatCOP(sum('salidas'))}</td>
+              <td class="monto">${formatCOP(
+                sum('efectivo') + sum('datafono') + sum('nequi') + sum('daviplata') + sum('bancolombia') + sum('bancodebogota') - sum('salidas')
+              )}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="acciones-tarjeta">
+        <button type="button" id="btn-exportar-tabla-diaria" class="btn btn-exportar">Exportar Excel (listado diario)</button>
+      </div>
+    </section>
+  `;
+}
+
 function enlazarEventos(container) {
+  const inputAnio = container.querySelector('#filtro-anio');
+  const inputPeriodo = container.querySelector('#filtro-periodo');
+
+  function aplicarPeriodoRapido() {
+    const anio = Number(inputAnio.value);
+    const periodo = PERIODOS.find((p) => p.value === inputPeriodo.value);
+    estado.anioSeleccionado = anio;
+    estado.periodoSeleccionado = inputPeriodo.value;
+    estado.desde = `${anio}-${String(periodo.mesInicio).padStart(2, '0')}-01`;
+    estado.hasta = `${anio}-${String(periodo.mesFin).padStart(2, '0')}-${String(ultimoDiaDeMes(anio, periodo.mesFin)).padStart(2, '0')}`;
+    pintarContenido(container);
+  }
+
+  if (inputAnio) inputAnio.addEventListener('change', aplicarPeriodoRapido);
+  if (inputPeriodo) inputPeriodo.addEventListener('change', aplicarPeriodoRapido);
+
   const inputDesde = container.querySelector('#filtro-desde');
   const inputHasta = container.querySelector('#filtro-hasta');
 
@@ -250,6 +391,11 @@ function enlazarEventos(container) {
   const btnExportar = container.querySelector('#btn-exportar-indicadores');
   if (btnExportar) {
     btnExportar.addEventListener('click', exportarExcel);
+  }
+
+  const btnExportarTablaDiaria = container.querySelector('#btn-exportar-tabla-diaria');
+  if (btnExportarTablaDiaria) {
+    btnExportarTablaDiaria.addEventListener('click', exportarTablaDiaria);
   }
 }
 
@@ -285,6 +431,51 @@ async function exportarExcel() {
     XLSX.utils.book_append_sheet(libro, hojaResumen, 'Resumen por método');
     XLSX.utils.book_append_sheet(libro, hojaDetalle, 'Detalle diario');
     XLSX.writeFile(libro, `indicadores-ventas-${estado.desde}-a-${estado.hasta}.xlsx`);
+  } catch (err) {
+    console.error('Error exportando Excel:', err);
+    mostrarToast('No se pudo exportar a Excel.', 'error');
+  }
+}
+
+async function exportarTablaDiaria() {
+  try {
+    const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
+    const [anioD, mesD, diaD] = estado.desde.split('-').map(Number);
+    const [anioH, mesH, diaH] = estado.hasta.split('-').map(Number);
+    let cursor = new Date(anioD, mesD - 1, diaD);
+    const fin = new Date(anioH, mesH - 1, diaH);
+    const filas = [];
+
+    while (cursor <= fin) {
+      const fechaISO = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
+      const f = estado.todasLasFilas.find((x) => x.fecha === fechaISO);
+      const efectivo = Number(f?.ventas_efectivo || 0);
+      const datafono = Number(f?.ventas_datafono || 0);
+      const nequi = Number(f?.ventas_nequi || 0);
+      const daviplata = Number(f?.ventas_daviplata || 0);
+      const bancolombia = Number(f?.ventas_transferencia_bancolombia || 0);
+      const bancodebogota = Number(f?.ventas_transferencia_bancodebogota || 0);
+      const salidas = Number(f?.salidas_efectivo || 0) + Number(f?.salidas_digital || 0);
+      const entradas = efectivo + datafono + nequi + daviplata + bancolombia + bancodebogota;
+
+      filas.push({
+        Día: fechaISO,
+        Efectivo: efectivo,
+        Datáfono: datafono,
+        Nequi: nequi,
+        Daviplata: daviplata,
+        Bancolombia: bancolombia,
+        'Banco de Bogotá': bancodebogota,
+        Salidas: salidas,
+        'Total neto': entradas - salidas,
+      });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    const hoja = XLSX.utils.json_to_sheet(filas);
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hoja, 'Listado diario');
+    XLSX.writeFile(libro, `listado-diario-${estado.desde}-a-${estado.hasta}.xlsx`);
   } catch (err) {
     console.error('Error exportando Excel:', err);
     mostrarToast('No se pudo exportar a Excel.', 'error');
