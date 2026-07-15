@@ -841,6 +841,9 @@ h3 {
   color: var(--color-negro);
 }
 
+.monto-total-dia { background: rgba(30, 78, 140, 0.08); color: var(--color-azul); border-radius: 6px; }
+.monto-neto-verde { background: rgba(30, 142, 90, 0.08); color: var(--color-verde-oscuro); border-radius: 6px; }
+
 /* ---------- Colores de trazabilidad: azul = viene de Ingresos, rojo = viene de Salidas ---------- */
 .total-ingresos, .monto-ingreso { color: var(--color-azul) !important; }
 .total-salidas, .monto-salida { color: var(--color-rojo) !important; }
