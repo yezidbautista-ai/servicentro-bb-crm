@@ -15,6 +15,13 @@
 // origen — de ahí se alimentan automáticamente la tarjeta "Pagos Diarios"
 // en Ventas Diarias y el saldo de la cuenta en Saldos y Cuentas.
 //
+// Un pago ya marcado como pagado se puede: (a) editar sus datos de compra
+// igual que cualquier otro, (b) "Reversar" — vuelve a pendiente y el
+// trigger de sql/027 devuelve automáticamente el dinero a la cuenta de
+// origen, o (c) "Eliminar" — borra la fila; si estaba pagada, el mismo
+// trigger revierte el movimiento antes de borrar, para no dejar nunca un
+// movimiento huérfano en Saldos y Cuentas.
+//
 // Solo administradores.
 
 import { registerModule } from '../../core/modules-registry.js';
@@ -362,9 +369,12 @@ function abrirModalDetalle(container, id) {
     `
         : ''
     }
+    ${p.notas ? `<div class="recibo-linea"><span>Notas</span><span>${p.notas}</span></div>` : ''}
     <div class="acciones-tarjeta">
       ${real !== 'pagado' ? `<button type="button" class="btn btn-primario btn-modal-pagar">Pagar</button>` : ''}
       <button type="button" class="btn-editar-salida btn-modal-editar">Editar</button>
+      ${p.estado === 'pagado' ? `<button type="button" class="btn-editar-salida btn-modal-reversar">Reversar pago</button>` : ''}
+      <button type="button" class="btn-eliminar-salida btn-modal-eliminar">Eliminar</button>
       <button type="button" class="btn btn-secundario btn-modal-cerrar">Cerrar</button>
     </div>
   `;
@@ -378,8 +388,23 @@ function abrirModalDetalle(container, id) {
   if (btnEditar) {
     btnEditar.addEventListener('click', () => {
       overlay.remove();
-      estado.editandoId = id;
-      pintarContenido(container);
+      abrirModalCompra(container, id);
+    });
+  }
+
+  const btnReversar = overlay.querySelector('.btn-modal-reversar');
+  if (btnReversar) {
+    btnReversar.addEventListener('click', async () => {
+      const exito = await reversarPago(container, id);
+      if (exito) overlay.remove();
+    });
+  }
+
+  const btnEliminar = overlay.querySelector('.btn-modal-eliminar');
+  if (btnEliminar) {
+    btnEliminar.addEventListener('click', async () => {
+      const exito = await eliminarPago(container, id);
+      if (exito) overlay.remove();
     });
   }
 
@@ -469,6 +494,7 @@ function abrirModalCompra(container, id) {
         </div>
       </label>
       <label>Fecha de vencimiento * <input type="date" class="pg-fecha-vencimiento" required value="${p?.fecha_vencimiento || ''}" /></label>
+      <label>Notas <input type="text" class="pg-notas" value="${p?.notas || ''}" /></label>
     </form>
     <div class="acciones-tarjeta">
       <button type="button" class="btn btn-primario btn-modal-guardar-compra">Guardar</button>
@@ -513,7 +539,7 @@ function abrirModalNuevoProveedor(container, overlayPadre) {
     <h3>Nuevo proveedor</h3>
     <form class="form-nuevo-proveedor-modal form-grid">
       <label>Nombre * <input type="text" class="np-nombre" required /></label>
-      <label>NIT * <input type="text" class="np-nit" required /></label>
+      <label>NIT <input type="text" class="np-nit" /></label>
       <label>Contacto <input type="text" class="np-contacto" /></label>
       <label>Teléfono <input type="text" class="np-telefono" /></label>
       <label>Correo electrónico <input type="email" class="np-correo" /></label>
@@ -590,9 +616,6 @@ function enlazarEventos(container) {
   const btnExportar = container.querySelector('#btn-exportar-pagos');
   if (btnExportar) btnExportar.addEventListener('click', exportarExcel);
 
-  container.querySelectorAll('.btn-editar-pago').forEach((btn) => {
-    btn.addEventListener('click', () => abrirModalCompra(container, btn.dataset.id));
-  });
   container.querySelectorAll('.btn-marcar-pagado').forEach((btn) => {
     btn.addEventListener('click', () => abrirModalGestionar(container, btn.dataset.id, null));
   });
@@ -617,14 +640,14 @@ async function crearProveedorInline(container, form, overlay, overlayPadre) {
   const numero_cuenta = form.querySelector('.np-numero-cuenta').value.trim();
   const enlace_drive = form.querySelector('.np-enlace-drive').value.trim();
 
-  if (!nombre || !nit) {
-    mostrarToast('Nombre y NIT son obligatorios.', 'error');
+  if (!nombre) {
+    mostrarToast('El nombre es obligatorio.', 'error');
     return;
   }
 
   const { data, error } = await supabase
     .from('proveedores')
-    .insert({ nombre, nit, contacto, telefono, correo, banco, tipo_cuenta, numero_cuenta, enlace_drive })
+    .insert({ nombre, nit: nit || null, contacto, telefono, correo, banco, tipo_cuenta, numero_cuenta, enlace_drive })
     .select()
     .single();
 
@@ -662,13 +685,14 @@ async function guardarCompra(container, form) {
   const fecha_compra = form.querySelector('.pg-fecha-compra').value;
   const valor = parseCOP(form.querySelector('.pg-valor').value);
   const fecha_vencimiento = form.querySelector('.pg-fecha-vencimiento').value;
+  const notas = form.querySelector('.pg-notas').value.trim();
 
   if (!proveedor_id || !fecha_compra || !fecha_vencimiento || valor <= 0) {
     mostrarToast('Proveedor, fecha de compra, valor y fecha de vencimiento son obligatorios.', 'error');
     return false;
   }
 
-  const payload = { proveedor_id, vendedor, numero_factura, fecha_compra, valor, fecha_vencimiento };
+  const payload = { proveedor_id, vendedor, numero_factura, fecha_compra, valor, fecha_vencimiento, notas };
 
   let error;
   if (estado.editandoId === 'nuevo') ({ error } = await supabase.from('proveedores_pagos').insert(payload));
@@ -727,6 +751,67 @@ async function confirmarPago(container, form, id) {
   return true;
 }
 
+async function reversarPago(container, id) {
+  const p = estado.registros.find((x) => x.id === id);
+  if (!p) return false;
+
+  const confirmado = await mostrarConfirmacion({
+    titulo: 'Reversar pago',
+    contenidoHTML: `<p>Esto vuelve el pago de <strong>${p.proveedores?.nombre || ''}</strong> a estado pendiente, y devuelve <strong>${formatCOP(p.valor_pagado)}</strong> a la cuenta de donde había salido. Los datos de pago (fecha, cuenta, comprobante) quedan en blanco, listos para volver a marcarlo como pagado correctamente.</p>`,
+    textoConfirmar: 'Sí, reversar',
+  });
+  if (!confirmado) return false;
+
+  const perfil = getPerfilActual();
+  const { error } = await supabase
+    .from('proveedores_pagos')
+    .update({
+      estado: 'pendiente',
+      fecha_pago: null,
+      valor_pagado: null,
+      metodo_pago: null,
+      cuenta_id: null,
+      numero_comprobante: null,
+      gestionado_por: perfil?.id,
+      gestionado_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+
+  if (error) {
+    console.error('Error reversando pago:', error);
+    mostrarToast(`No se pudo reversar: ${error.message}`, 'error');
+    return false;
+  }
+
+  mostrarToast('Pago reversado. El saldo de la cuenta ya quedó ajustado.', 'exito');
+  await cargarYRenderizar(container);
+  return true;
+}
+
+async function eliminarPago(container, id) {
+  const p = estado.registros.find((x) => x.id === id);
+  if (!p) return false;
+
+  const confirmado = await mostrarConfirmacion({
+    titulo: 'Eliminar pago',
+    contenidoHTML: `<p>Vas a eliminar permanentemente esta compra/pago de <strong>${p.proveedores?.nombre || ''}</strong>. Esta acción no se puede deshacer.${p.estado === 'pagado' ? ' Como ya estaba pagada, el dinero se devuelve automáticamente a la cuenta de origen antes de borrar.' : ''}</p>`,
+    textoConfirmar: 'Sí, eliminar',
+  });
+  if (!confirmado) return false;
+
+  const { error } = await supabase.from('proveedores_pagos').delete().eq('id', id);
+
+  if (error) {
+    console.error('Error eliminando pago:', error);
+    mostrarToast(`No se pudo eliminar: ${error.message}`, 'error');
+    return false;
+  }
+
+  mostrarToast('Pago eliminado.', 'exito');
+  await cargarYRenderizar(container);
+  return true;
+}
+
 async function exportarExcel() {
   try {
     const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
@@ -742,6 +827,7 @@ async function exportarExcel() {
       'Valor pagado': p.valor_pagado || '',
       'Método de pago': p.metodo_pago ? etiquetaMetodo(p.metodo_pago) : '',
       Comprobante: p.numero_comprobante || '',
+      Notas: p.notas || '',
     }));
     const hoja = XLSX.utils.json_to_sheet(filas);
     const libro = XLSX.utils.book_new();
