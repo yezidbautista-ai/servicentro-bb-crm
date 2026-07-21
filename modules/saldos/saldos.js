@@ -16,7 +16,7 @@ import { registerModule } from '../../core/modules-registry.js';
 import { supabase } from '../../core/supabase-client.js';
 import { getPerfilActual } from '../../core/auth.js';
 import { formatCOP, parseCOP, formatearMientrasEscribe, activarInputMoneda } from '../../core/helpers/currency.js';
-import { hoyISO } from '../../core/helpers/dates.js';
+import { hoyISO, primerDiaDelMes } from '../../core/helpers/dates.js';
 import { mostrarToast } from '../../core/ui.js';
 
 const ORIGENES = {
@@ -30,15 +30,23 @@ const ORIGENES = {
 
 const estado = {
   cuentas: [],
-  movimientos: [],
+  movimientos: [], // "Movimientos" (tabla grande) -- ya filtrado en el servidor, no en el navegador
+  movimientosTransferencias: [], // "Movimientos entre Cuentas" -- también filtrado en el servidor
   filtroCuenta: '',
   filtroDesde: '',
   filtroHasta: '',
+  filtroDesdeTransferencias: '',
+  filtroHastaTransferencias: '',
   editandoSaldoId: null, // id de la cuenta cuyo saldo inicial se está editando
 };
 
 async function render(container) {
   estado.editandoSaldoId = null;
+  estado.filtroCuenta = '';
+  estado.filtroDesde = primerDiaDelMes(hoyISO());
+  estado.filtroHasta = '';
+  estado.filtroDesdeTransferencias = primerDiaDelMes(hoyISO());
+  estado.filtroHastaTransferencias = '';
 
   container.innerHTML = `
     <h2>Saldos y Cuentas</h2>
@@ -48,40 +56,78 @@ async function render(container) {
   await cargarYRenderizar(container);
 }
 
+// "Saldo actual por cuenta" siempre muestra el saldo real de HOY (no tiene
+// sentido "filtrarlo por fecha" -- es una foto del momento), así que no se
+// acota nunca. Son solo 5 filas, no es la tabla pesada.
+async function cargarCuentas() {
+  const { data: cuentas, error } = await supabase.from('cuentas_saldos').select('*').order('nombre', { ascending: true });
+  if (error) {
+    console.error('Error cargando cuentas_saldos:', error);
+    mostrarToast(`No se pudieron cargar las cuentas: ${error.message}`, 'error');
+  }
+  estado.cuentas = cuentas || [];
+}
+
+// "Movimientos entre Cuentas" también se acota por fecha (igual que
+// "Movimientos") -- arranca en el mes en curso y el filtro se consulta
+// directo en Supabase, no se descarga el historial completo. Necesario
+// desde que se cargó un año completo de consignaciones internas.
+async function cargarTransferencias() {
+  let query = supabase
+    .from('movimientos_cuenta')
+    .select('*, cuentas(nombre)')
+    .eq('origen_tipo', 'transferencia_interna')
+    .order('fecha', { ascending: false })
+    .order('created_at', { ascending: false });
+
+  if (estado.filtroDesdeTransferencias) query = query.gte('fecha', estado.filtroDesdeTransferencias);
+  if (estado.filtroHastaTransferencias) query = query.lte('fecha', estado.filtroHastaTransferencias);
+
+  const { data: transferencias, error } = await query;
+  if (error) {
+    console.error('Error cargando movimientos_cuenta (transferencias):', error);
+    mostrarToast(`No se pudieron cargar las transferencias: ${error.message}`, 'error');
+  }
+  estado.movimientosTransferencias = transferencias || [];
+}
+
+// "Movimientos" (la tabla grande, con todos los tipos de movimiento) SÍ se
+// acota por fecha/cuenta -- el filtro ahora se aplica en la consulta a
+// Supabase (no se descarga el historial completo para filtrarlo después en
+// el navegador), para que la pestaña no se ponga lenta a medida que crece
+// el historial. Por defecto arranca en el mes en curso (ver render()).
+async function cargarMovimientosPrincipales() {
+  let query = supabase
+    .from('movimientos_cuenta')
+    .select('*, cuentas(nombre)')
+    .order('fecha', { ascending: false })
+    .order('created_at', { ascending: false });
+
+  if (estado.filtroCuenta) query = query.eq('cuenta_id', estado.filtroCuenta);
+  if (estado.filtroDesde) query = query.gte('fecha', estado.filtroDesde);
+  if (estado.filtroHasta) query = query.lte('fecha', estado.filtroHasta);
+
+  const { data: movimientos, error } = await query;
+  if (error) {
+    console.error('Error cargando movimientos_cuenta:', error);
+    mostrarToast(`No se pudieron cargar los movimientos: ${error.message}`, 'error');
+  }
+  estado.movimientos = movimientos || [];
+}
+
 async function cargarYRenderizar(container) {
   const contenido = container.querySelector('#saldos-contenido');
   contenido.innerHTML = '<p class="mensaje-vacio">Cargando…</p>';
 
-  const [{ data: cuentas, error: errorCuentas }, { data: movimientos, error: errorMovimientos }] = await Promise.all([
-    supabase.from('cuentas_saldos').select('*').order('nombre', { ascending: true }),
-    supabase.from('movimientos_cuenta').select('*, cuentas(nombre)').order('fecha', { ascending: false }).order('created_at', { ascending: false }),
-  ]);
-
-  if (errorCuentas) {
-    console.error('Error cargando cuentas_saldos:', errorCuentas);
-    contenido.innerHTML = `<p class="mensaje-vacio">No se pudo cargar. ${errorCuentas.message}</p>`;
-    return;
-  }
-  if (errorMovimientos) console.error('Error cargando movimientos_cuenta:', errorMovimientos);
-
-  estado.cuentas = cuentas || [];
-  estado.movimientos = movimientos || [];
+  await Promise.all([cargarCuentas(), cargarTransferencias(), cargarMovimientosPrincipales()]);
   pintarContenido(container);
-}
-
-function movimientosFiltrados() {
-  return estado.movimientos.filter((m) => {
-    if (estado.filtroCuenta && m.cuenta_id !== estado.filtroCuenta) return false;
-    if (estado.filtroDesde && m.fecha < estado.filtroDesde) return false;
-    if (estado.filtroHasta && m.fecha > estado.filtroHasta) return false;
-    return true;
-  });
 }
 
 function pintarContenido(container) {
   const contenido = container.querySelector('#saldos-contenido');
 
   contenido.innerHTML = `
+    ${renderAccionesPrincipales()}
     ${renderTarjetaCuentas()}
     ${renderTarjetaTransferencias()}
     ${renderTarjetaMovimientos()}
@@ -92,7 +138,7 @@ function pintarContenido(container) {
 }
 
 function transferenciasAgrupadas() {
-  const internas = estado.movimientos.filter((m) => m.origen_tipo === 'transferencia_interna');
+  const internas = estado.movimientosTransferencias;
   const grupos = {};
 
   internas.forEach((m) => {
@@ -108,12 +154,26 @@ function transferenciasAgrupadas() {
   return Object.values(grupos).sort((a, b) => b.fecha.localeCompare(a.fecha));
 }
 
+// Aviso de que, por defecto, "Movimientos entre Cuentas" solo trae el mes
+// en curso -- para que no parezca que faltan transferencias viejas cuando
+// en realidad hay que usar los filtros de arriba para verlas.
+function renderNotaRangoTransferencias() {
+  const esRangoPorDefecto = estado.filtroDesdeTransferencias === primerDiaDelMes(hoyISO()) && !estado.filtroHastaTransferencias;
+  if (!esRangoPorDefecto) return '';
+  return '<p class="mensaje-vacio">Mostrando el mes en curso. Usa los filtros de arriba para ver otros períodos.</p>';
+}
+
 function renderTarjetaTransferencias() {
   const lista = transferenciasAgrupadas();
 
   return `
     <section class="tarjeta">
       <h3>Movimientos entre Cuentas</h3>
+      <div class="controles-fecha">
+        <label>Desde <input type="date" id="filtro-desde-transferencias" value="${estado.filtroDesdeTransferencias}" /></label>
+        <label>Hasta <input type="date" id="filtro-hasta-transferencias" value="${estado.filtroHastaTransferencias}" /></label>
+      </div>
+      ${renderNotaRangoTransferencias()}
       <table class="tabla-simple">
         <thead><tr><th>Fecha</th><th>Detalle</th><th>Desde</th><th>Hacia</th><th>Monto</th></tr></thead>
         <tbody>
@@ -131,11 +191,26 @@ function renderTarjetaTransferencias() {
               </tr>`
                   )
                   .join('')
-              : '<tr><td colspan="5" class="mensaje-vacio">Sin transferencias entre cuentas todavía.</td></tr>'
+              : '<tr><td colspan="5" class="mensaje-vacio">Sin transferencias entre cuentas con estos filtros.</td></tr>'
           }
         </tbody>
       </table>
+      <div class="acciones-tarjeta">
+        <button type="button" id="btn-exportar-transferencias" class="btn btn-exportar">Exportar Excel</button>
+      </div>
     </section>
+  `;
+}
+
+// Los 3 botones de acción de esta pestaña van al inicio (antes de las
+// tarjetas), para no tener que bajar hasta el final de la lista de
+// movimientos cada vez que se necesitan.
+function renderAccionesPrincipales() {
+  return `
+    <div class="acciones-tarjeta acciones-saldos-top">
+      <button type="button" id="btn-nuevo-ajuste" class="btn btn-secundario">+ Agregar ajuste manual</button>
+      <button type="button" id="btn-nueva-transferencia" class="btn btn-azul">⇄ Transferir entre cuentas</button>
+    </div>
   `;
 }
 
@@ -149,6 +224,9 @@ function renderTarjetaCuentas() {
           ${estado.cuentas.map((c) => renderFilaCuenta(c)).join('')}
         </tbody>
       </table>
+      <div class="acciones-tarjeta">
+        <button type="button" id="btn-exportar-saldos" class="btn btn-exportar">Exportar Excel</button>
+      </div>
     </section>
   `;
 }
@@ -184,8 +262,17 @@ function renderFilaCuenta(c) {
   `;
 }
 
+// Aviso de que, por defecto, "Movimientos" solo trae el mes en curso -- para
+// que no parezca que faltan datos viejos cuando en realidad hay que usar
+// los filtros de arriba (Desde/Hasta) para verlos.
+function renderNotaRangoMovimientos() {
+  const esRangoPorDefecto = !estado.filtroCuenta && estado.filtroDesde === primerDiaDelMes(hoyISO()) && !estado.filtroHasta;
+  if (!esRangoPorDefecto) return '';
+  return '<p class="mensaje-vacio">Mostrando el mes en curso. Usa los filtros de arriba para ver otros períodos.</p>';
+}
+
 function renderTarjetaMovimientos() {
-  const lista = movimientosFiltrados();
+  const lista = estado.movimientos;
 
   return `
     <section class="tarjeta">
@@ -201,6 +288,7 @@ function renderTarjetaMovimientos() {
         <label>Desde <input type="date" id="filtro-desde-movimientos" value="${estado.filtroDesde}" /></label>
         <label>Hasta <input type="date" id="filtro-hasta-movimientos" value="${estado.filtroHasta}" /></label>
       </div>
+      ${renderNotaRangoMovimientos()}
 
       <div class="tabla-scroll">
         <table class="tabla-simple">
@@ -227,8 +315,6 @@ function renderTarjetaMovimientos() {
       </div>
 
       <div class="acciones-tarjeta">
-        <button type="button" id="btn-nuevo-ajuste" class="btn btn-secundario">+ Agregar ajuste manual</button>
-        <button type="button" id="btn-nueva-transferencia" class="btn btn-azul">⇄ Transferir entre cuentas</button>
         <button type="button" id="btn-exportar-movimientos" class="btn btn-exportar">Exportar Excel</button>
       </div>
     </section>
@@ -367,22 +453,42 @@ function enlazarEventos(container) {
 
   const filtroCuenta = container.querySelector('#filtro-cuenta-movimientos');
   if (filtroCuenta) {
-    filtroCuenta.addEventListener('change', (e) => {
+    filtroCuenta.addEventListener('change', async (e) => {
       estado.filtroCuenta = e.target.value;
+      await cargarMovimientosPrincipales();
       pintarContenido(container);
     });
   }
   const filtroDesde = container.querySelector('#filtro-desde-movimientos');
   if (filtroDesde) {
-    filtroDesde.addEventListener('change', (e) => {
+    filtroDesde.addEventListener('change', async (e) => {
       estado.filtroDesde = e.target.value;
+      await cargarMovimientosPrincipales();
       pintarContenido(container);
     });
   }
   const filtroHasta = container.querySelector('#filtro-hasta-movimientos');
   if (filtroHasta) {
-    filtroHasta.addEventListener('change', (e) => {
+    filtroHasta.addEventListener('change', async (e) => {
       estado.filtroHasta = e.target.value;
+      await cargarMovimientosPrincipales();
+      pintarContenido(container);
+    });
+  }
+
+  const filtroDesdeTransferencias = container.querySelector('#filtro-desde-transferencias');
+  if (filtroDesdeTransferencias) {
+    filtroDesdeTransferencias.addEventListener('change', async (e) => {
+      estado.filtroDesdeTransferencias = e.target.value;
+      await cargarTransferencias();
+      pintarContenido(container);
+    });
+  }
+  const filtroHastaTransferencias = container.querySelector('#filtro-hasta-transferencias');
+  if (filtroHastaTransferencias) {
+    filtroHastaTransferencias.addEventListener('change', async (e) => {
+      estado.filtroHastaTransferencias = e.target.value;
+      await cargarTransferencias();
       pintarContenido(container);
     });
   }
@@ -393,8 +499,14 @@ function enlazarEventos(container) {
   const btnNuevaTransferencia = container.querySelector('#btn-nueva-transferencia');
   if (btnNuevaTransferencia) btnNuevaTransferencia.addEventListener('click', () => abrirModalTransferencia(container));
 
-  const btnExportar = container.querySelector('#btn-exportar-movimientos');
-  if (btnExportar) btnExportar.addEventListener('click', exportarExcel);
+  const btnExportarSaldos = container.querySelector('#btn-exportar-saldos');
+  if (btnExportarSaldos) btnExportarSaldos.addEventListener('click', exportarSaldosExcel);
+
+  const btnExportarTransferencias = container.querySelector('#btn-exportar-transferencias');
+  if (btnExportarTransferencias) btnExportarTransferencias.addEventListener('click', exportarTransferenciasExcel);
+
+  const btnExportarMovimientos = container.querySelector('#btn-exportar-movimientos');
+  if (btnExportarMovimientos) btnExportarMovimientos.addEventListener('click', exportarMovimientosExcel);
 }
 
 async function guardarSaldoInicial(container, cuentaId) {
@@ -498,11 +610,13 @@ async function guardarTransferencia(container, form) {
   return true;
 }
 
-async function exportarExcel() {
+// Cada tarjeta tiene su propio botón de exportar, con su propio archivo --
+// más simple de abrir/revisar que un único libro con todo mezclado.
+async function exportarSaldosExcel() {
   try {
     const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
 
-    const hojaCuentas = XLSX.utils.json_to_sheet(
+    const hoja = XLSX.utils.json_to_sheet(
       estado.cuentas.map((c) => ({
         Cuenta: c.nombre,
         'Saldo inicial': c.saldo_inicial,
@@ -510,8 +624,44 @@ async function exportarExcel() {
       }))
     );
 
-    const hojaMovimientos = XLSX.utils.json_to_sheet(
-      movimientosFiltrados().map((m) => ({
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hoja, 'Saldos');
+    XLSX.writeFile(libro, 'saldo-actual-por-cuenta-servicentro-bb.xlsx');
+  } catch (err) {
+    console.error('Error exportando Excel:', err);
+    mostrarToast('No se pudo exportar a Excel.', 'error');
+  }
+}
+
+async function exportarTransferenciasExcel() {
+  try {
+    const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
+
+    const hoja = XLSX.utils.json_to_sheet(
+      transferenciasAgrupadas().map((t) => ({
+        Fecha: t.fecha,
+        Detalle: t.concepto,
+        Desde: t.desde || '',
+        Hacia: t.hacia || '',
+        Monto: t.monto,
+      }))
+    );
+
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hoja, 'Movimientos entre Cuentas');
+    XLSX.writeFile(libro, 'movimientos-entre-cuentas-servicentro-bb.xlsx');
+  } catch (err) {
+    console.error('Error exportando Excel:', err);
+    mostrarToast('No se pudo exportar a Excel.', 'error');
+  }
+}
+
+async function exportarMovimientosExcel() {
+  try {
+    const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
+
+    const hoja = XLSX.utils.json_to_sheet(
+      estado.movimientos.map((m) => ({
         Fecha: m.fecha,
         Cuenta: m.cuentas?.nombre || '',
         Concepto: m.concepto,
@@ -521,9 +671,8 @@ async function exportarExcel() {
     );
 
     const libro = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(libro, hojaCuentas, 'Saldos');
-    XLSX.utils.book_append_sheet(libro, hojaMovimientos, 'Movimientos');
-    XLSX.writeFile(libro, 'saldos-cuentas-servicentro-bb.xlsx');
+    XLSX.utils.book_append_sheet(libro, hoja, 'Movimientos');
+    XLSX.writeFile(libro, 'movimientos-servicentro-bb.xlsx');
   } catch (err) {
     console.error('Error exportando Excel:', err);
     mostrarToast('No se pudo exportar a Excel.', 'error');
