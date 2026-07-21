@@ -19,7 +19,7 @@
   --color-vencido: #d32f2f;
   --radio: 10px;
   --sombra: 0 2px 10px rgba(26, 26, 26, 0.1);
-  --font-display: 'Oswald', 'Segoe UI Condensed', sans-serif;
+  --font-display: var(--font-cuerpo); /* unificado con el body -- antes 'Oswald', ver captura de referencia del 21-jul */
   --font-cuerpo: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
 }
@@ -1003,4 +1003,57 @@ h3 {
   font-size: 0.92rem;
   color: var(--color-texto);
   margin: 0;
+}
+
+/* ---------- Saldos y Cuentas: barra de acciones al inicio de la pestaña ---------- */
+.acciones-saldos-top {
+  justify-content: flex-start;
+  margin-top: 0;
+  margin-bottom: 1.25rem;
+}
+
+/* ---------- Listados: sombreado alterno para identificar cada fila ---------- */
+.tabla-simple tbody tr:nth-child(even) { background: var(--color-fondo); }
+
+/* ---------- Grid de 3 columnas (tarjetas KPI de Indicadores) ---------- */
+.grid-tres-columnas {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+  margin-bottom: 1.25rem;
+}
+
+@media (max-width: 900px) {
+  .grid-tres-columnas { grid-template-columns: 1fr; }
+}
+
+.grid-tres-columnas .stat-card { margin-bottom: 0; height: 100%; }
+
+/* ---------- Pastillas de selección de año/mes (en vez de desplegable) ---------- */
+.pastillas-fila {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.pastilla {
+  background: var(--color-fondo);
+  border: 1px solid var(--color-borde);
+  border-radius: 999px;
+  padding: 0.35rem 0.85rem;
+  font-size: 0.82rem;
+  color: var(--color-texto-suave);
+  cursor: pointer;
+  font-family: var(--font-cuerpo);
+}
+
+.pastilla:hover { background: #eceff2; }
+
+.pastilla.activo {
+  background: var(--color-azul);
+  border-color: var(--color-azul);
+  color: #fff;
+  font-weight: 600;
 }
