@@ -899,3 +899,108 @@ h3 {
   color: var(--color-texto-suave);
   margin-top: 0.2rem;
 }
+
+/* ---------- Asistente "Diligenciar Registro Diario" (Registro Diario) ---------- */
+.btn-diligenciar { white-space: nowrap; }
+
+.modal-wizard { max-width: 640px; }
+
+.wizard-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.wizard-header h3 { margin: 0; }
+
+.wizard-cerrar {
+  background: none;
+  border: none;
+  font-size: 1.6rem;
+  line-height: 1;
+  color: var(--color-texto-suave);
+  cursor: pointer;
+  padding: 0 0.2rem;
+}
+
+.wizard-cerrar:hover { color: var(--color-texto); }
+
+.wizard-pasos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid var(--color-borde);
+  padding-bottom: 0.75rem;
+}
+
+.wizard-paso-tab {
+  background: var(--color-fondo);
+  border: 1px solid var(--color-borde);
+  border-radius: 999px;
+  padding: 0.35rem 0.85rem;
+  font-size: 0.82rem;
+  color: var(--color-texto-suave);
+  cursor: pointer;
+}
+
+.wizard-paso-tab.activo {
+  background: var(--color-azul);
+  border-color: var(--color-azul);
+  color: #fff;
+  font-weight: 600;
+}
+
+.wizard-paso-tab:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.wizard-cuerpo { min-height: 120px; }
+
+.wizard-instruccion {
+  font-size: 0.85rem;
+  color: var(--color-texto-suave);
+  margin-top: 0;
+  margin-bottom: 0.9rem;
+}
+
+.wizard-acciones-paso {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-borde);
+}
+
+.wizard-acciones-consignacion { justify-content: center; margin-top: 0.5rem; }
+
+.wizard-label-comentarios {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+  color: var(--color-texto-suave);
+  text-transform: uppercase;
+}
+
+.wizard-label-comentarios textarea {
+  font-family: var(--font-cuerpo);
+  font-size: 0.95rem;
+  padding: 0.6rem;
+  border: 1px solid var(--color-borde);
+  border-radius: 6px;
+  resize: vertical;
+  text-transform: none;
+  color: var(--color-texto);
+}
+
+.tarjeta-comentarios { border-left: 4px solid var(--color-azul); }
+
+.texto-comentarios {
+  white-space: pre-line;
+  font-size: 0.92rem;
+  color: var(--color-texto);
+  margin: 0;
+}
