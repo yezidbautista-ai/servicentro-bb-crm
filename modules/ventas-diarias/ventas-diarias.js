@@ -2,16 +2,22 @@
 //
 // Módulo 1 — Ventas Diarias (registro de caja).
 //
-// Layout: Ingresos (izquierda) y Salidas (derecha) en tablas gemelas, cada
-// una con su propio total — Ingresos en azul, Salidas en rojo — y esos
-// mismos colores se repiten en el Cierre de Caja para que se identifique de
-// dónde viene cada cifra. Debajo va el Cierre de Caja grande (protagonista
-// visual) y luego Pagos Diarios.
+// Flujo guiado: junto al selector de fecha hay un único botón
+// "Diligenciar Registro Diario" (o "Editar Registro Diario" si el día ya
+// tiene datos) que abre un asistente en ventana emergente con 4 pasos
+// secuenciales, para no fallar y llenar todo en orden:
+//   1. Ingresos del día (con subtotal en vivo).
+//   2. Salidas del día (con subtotal en vivo).
+//   3. Comentarios del día (opcional).
+//   4. ¿Consignación entre cuentas? (Transferir entre cuentas / Omitir).
+// Al terminar el asistente, la página principal muestra el Cierre de Caja,
+// Pagos Diarios y, ya sin pasos guiados, el botón rojo "Enviar registro
+// del día" (más Eliminar/Exportar) — igual que siempre.
 //
-// Flujo de edición: al guardar por primera vez, cada tarjeta queda bloqueada
-// (solo lectura) con un único botón "Editar ingresos" / "Editar salidas".
-// Al enviar el día (con confirmación), TODO queda bloqueado permanentemente
-// — reforzado con triggers en la base de datos (sql/007), no solo frontend.
+// Mientras el día no se ha enviado, el asistente se puede reabrir en
+// cualquier momento (precargado con lo ya guardado) para corregir algo;
+// una vez enviado, todo queda bloqueado — reforzado con triggers en la
+// base de datos (sql/007), no solo frontend.
 //
 // Nota de seguridad de datos: la tarjeta "Pagos Diarios" muestra pagos a
 // proveedores (información financiera). A petición explícita, Fabian
@@ -31,13 +37,18 @@ import {
 import { hoyISO } from '../../core/helpers/dates.js';
 import { mostrarToast, mostrarConfirmacion } from '../../core/ui.js';
 
+// Orden pedido para el paso de Ingresos del asistente: efectivo, nequi,
+// daviplata, datáfono, Banco de Bogotá (QR), Transferencia Bancolombia.
+// "Banco de Bogotá (QR)" es solo una nueva etiqueta para la columna que ya
+// existía (ventas_transferencia_bancodebogota) — no cambia nada en la base
+// de datos ni en los triggers.
 const METODOS_INGRESO = [
   { campo: 'ventas_efectivo', label: 'Efectivo' },
-  { campo: 'ventas_datafono', label: 'Datáfono' },
   { campo: 'ventas_nequi', label: 'Nequi' },
   { campo: 'ventas_daviplata', label: 'Daviplata' },
+  { campo: 'ventas_datafono', label: 'Datáfono' },
+  { campo: 'ventas_transferencia_bancodebogota', label: 'Banco de Bogotá (QR)' },
   { campo: 'ventas_transferencia_bancolombia', label: 'Transferencia Bancolombia' },
-  { campo: 'ventas_transferencia_bancodebogota', label: 'Transferencia Banco de Bogotá' },
 ];
 
 const METODOS_SALIDA = [
@@ -48,24 +59,22 @@ const METODOS_SALIDA = [
   { value: 'transferencia', label: 'Transferencia Bancolombia' },
 ];
 
-const MESES_MANUALES = [
-  { valor: '2026-01-01', label: 'Enero 2026' },
-  { valor: '2026-02-01', label: 'Febrero 2026' },
-  { valor: '2026-03-01', label: 'Marzo 2026' },
-  { valor: '2026-04-01', label: 'Abril 2026' },
-  { valor: '2026-05-01', label: 'Mayo 2026' },
-  { valor: '2026-06-01', label: 'Junio 2026' },
+const PASOS_WIZARD = [
+  { n: 1, label: 'Ingresos' },
+  { n: 2, label: 'Salidas' },
+  { n: 3, label: 'Comentarios' },
+  { n: 4, label: 'Consignación' },
 ];
 
 const estado = {
   fecha: hoyISO(),
-  esCargaManual: false,
   ventaDiaria: null,
   salidas: [],
   pagosDiarios: [],
   cuentasActivas: [],
-  modoEdicionIngresos: false,
   modoEdicionSalidas: false,
+  mostrarFormNuevaSalida: false,
+  wizardPaso: 1,
 };
 
 function esAdmin() {
@@ -76,71 +85,36 @@ function etiquetaMetodo(valor) {
   return METODOS_SALIDA.find((m) => m.value === valor)?.label || valor;
 }
 
+function escaparHTML(texto) {
+  const div = document.createElement('div');
+  div.textContent = texto ?? '';
+  return div.innerHTML;
+}
+
 async function render(container) {
   estado.fecha = hoyISO();
-  estado.esCargaManual = false;
-  estado.modoEdicionIngresos = false;
   estado.modoEdicionSalidas = false;
+  estado.mostrarFormNuevaSalida = false;
+  estado.wizardPaso = 1;
 
   container.innerHTML = `
     <h2>Registro Diario</h2>
-    ${esAdmin() ? renderControlesAdmin() : renderFechaFija()}
+    <div id="ventas-diarias-controles"></div>
     <div id="ventas-diarias-contenido">Cargando…</div>
   `;
 
-  if (esAdmin()) {
-    const inputFecha = container.querySelector('#input-fecha');
-    inputFecha.addEventListener('change', (e) => {
-      estado.fecha = e.target.value;
-      estado.esCargaManual = false;
-      estado.modoEdicionIngresos = false;
-      estado.modoEdicionSalidas = false;
-      const selectorMes = container.querySelector('#selector-mes-manual');
-      if (selectorMes) selectorMes.value = '';
-      cargarYRenderizar(container);
-    });
-
-    const selectorMes = container.querySelector('#selector-mes-manual');
-    selectorMes.addEventListener('change', (e) => {
-      if (!e.target.value) return;
-      estado.fecha = e.target.value;
-      estado.esCargaManual = true;
-      estado.modoEdicionIngresos = false;
-      estado.modoEdicionSalidas = false;
-      inputFecha.value = '';
-      cargarYRenderizar(container);
-    });
-  }
-
-  await cargarYRenderizar(container);
+  await cargarYPintar(container);
 }
 
-function renderControlesAdmin() {
-  return `
-    <div class="controles-fecha">
-      <label>
-        Fecha
-        <input type="date" id="input-fecha" value="${estado.fecha}" />
-      </label>
-      <label>
-        Carga manual (ene–jun 2026)
-        <select id="selector-mes-manual">
-          <option value="">— Seleccionar mes —</option>
-          ${MESES_MANUALES.map((m) => `<option value="${m.valor}">${m.label}</option>`).join('')}
-        </select>
-      </label>
-    </div>
-  `;
-}
-
-function renderFechaFija() {
-  return `<p class="mensaje-vacio">Registro del día: <strong>${estado.fecha}</strong></p>`;
-}
-
-async function cargarYRenderizar(container) {
+async function cargarYPintar(container) {
   const contenido = container.querySelector('#ventas-diarias-contenido');
-  contenido.innerHTML = '<p class="mensaje-vacio">Cargando…</p>';
+  if (contenido) contenido.innerHTML = '<p class="mensaje-vacio">Cargando…</p>';
+  await cargarDatos();
+  pintarControles(container);
+  pintarPagina(container);
+}
 
+async function cargarDatos() {
   const { data: fila, error } = await supabase
     .from('ventas_diarias_totales')
     .select('*')
@@ -149,12 +123,13 @@ async function cargarYRenderizar(container) {
 
   if (error) {
     console.error('Error cargando ventas_diarias_totales:', error);
-    contenido.innerHTML = `<p class="mensaje-vacio">No se pudo cargar el registro. ${error.message}</p>`;
+    mostrarToast(`No se pudo cargar el registro: ${error.message}`, 'error');
+    estado.ventaDiaria = null;
+    estado.salidas = [];
     return;
   }
 
   estado.ventaDiaria = fila || null;
-  estado.modoEdicionIngresos = !fila; // si no existe aún, arranca en modo edición
 
   if (estado.ventaDiaria) {
     const { data: salidas, error: errorSalidas } = await supabase
@@ -186,29 +161,68 @@ async function cargarYRenderizar(container) {
     if (errorCuentas) console.error('Error cargando cuentas activas:', errorCuentas);
     estado.cuentasActivas = cuentas || [];
   }
-
-  pintarContenido(container);
 }
 
-function pintarContenido(container) {
+function pintarControles(container) {
+  const controles = container.querySelector('#ventas-diarias-controles');
+  const v = estado.ventaDiaria;
+  const puedeDiligenciar = !v || !v.enviado;
+  const labelBoton = v ? 'Editar Registro Diario' : 'Diligenciar Registro Diario';
+  const botonWizard = puedeDiligenciar
+    ? `<button type="button" id="btn-abrir-wizard" class="btn btn-primario btn-diligenciar">📝 ${labelBoton}</button>`
+    : '';
+
+  controles.innerHTML = esAdmin()
+    ? `
+      <div class="controles-fecha">
+        <label>Fecha <input type="date" id="input-fecha" value="${estado.fecha}" /></label>
+        ${botonWizard}
+      </div>
+    `
+    : `
+      <div class="controles-fecha">
+        <p class="mensaje-vacio">Registro del día: <strong>${estado.fecha}</strong></p>
+        ${botonWizard}
+      </div>
+    `;
+
+  const inputFecha = controles.querySelector('#input-fecha');
+  if (inputFecha) {
+    inputFecha.addEventListener('change', (e) => {
+      estado.fecha = e.target.value;
+      cargarYPintar(container);
+    });
+  }
+
+  const btnAbrirWizard = controles.querySelector('#btn-abrir-wizard');
+  if (btnAbrirWizard) btnAbrirWizard.addEventListener('click', () => abrirWizard(container));
+}
+
+function pintarPagina(container) {
   const contenido = container.querySelector('#ventas-diarias-contenido');
   const v = estado.ventaDiaria;
 
   contenido.innerHTML = `
     ${v?.enviado ? renderEtiquetaEnviado(v) : ''}
     ${v && !v.enviado ? renderEtiquetaPendiente() : ''}
-    <div class="grid-dos-columnas">
-      ${renderFormularioIngresos()}
-      ${v ? renderSalidas() : '<section class="tarjeta"><p class="mensaje-vacio">Guarda los ingresos del día para poder registrar salidas.</p></section>'}
-    </div>
+    ${!v ? '<p class="mensaje-vacio">Todavía no se ha diligenciado el registro de este día. Usa el botón "Diligenciar Registro Diario" para comenzar.</p>' : ''}
     ${v ? renderTotales() : ''}
+    ${v?.comentarios ? renderComentariosGuardados(v.comentarios) : ''}
     ${renderPagosDiarios()}
     ${esAdmin() ? renderTransferenciaCuentas() : ''}
     ${v ? renderAccionesFinales() : ''}
   `;
 
-  enlazarEventos(container);
-  container.querySelectorAll('.input-moneda input').forEach(activarInputMoneda);
+  enlazarEventosPagina(container);
+}
+
+function renderComentariosGuardados(texto) {
+  return `
+    <section class="tarjeta tarjeta-comentarios">
+      <h3>📝 Comentarios del día</h3>
+      <p class="texto-comentarios">${escaparHTML(texto).replace(/\n/g, '<br>')}</p>
+    </section>
+  `;
 }
 
 function renderTransferenciaCuentas() {
@@ -240,106 +254,6 @@ function crearCeldaMoneda(campo, valor, disabledAttr) {
       <input type="text" inputmode="numeric" placeholder="0" data-campo="${campo}"
         value="${valorFormateado}" ${disabledAttr} />
     </div>
-  `;
-}
-
-function renderFormularioIngresos() {
-  const v = estado.ventaDiaria;
-  const enviado = v?.enviado;
-  const editable = !v || estado.modoEdicionIngresos;
-  const disabledAttr = editable ? '' : 'disabled';
-
-  const totalIngresos = v ? METODOS_INGRESO.reduce((acc, m) => acc + Number(v[m.campo] || 0), 0) : 0;
-
-  const filas = METODOS_INGRESO.map(
-    (m) => `
-    <tr>
-      <td>${m.label}</td>
-      <td>${crearCeldaMoneda(m.campo, v?.[m.campo], disabledAttr)}</td>
-    </tr>`
-  ).join('');
-
-  const filaDineroBase = `
-    <tr class="fila-secundaria">
-      <td>Dinero base (para vueltas)</td>
-      <td>${crearCeldaMoneda('dinero_base', v?.dinero_base, disabledAttr)}</td>
-    </tr>
-  `;
-
-  let botones = '';
-  if (!v) {
-    botones = `<button type="submit" form="form-ingresos" class="btn btn-primario">Guardar ingresos</button>`;
-  } else if (!enviado) {
-    botones = estado.modoEdicionIngresos
-      ? `
-        <button type="submit" form="form-ingresos" class="btn btn-primario">Guardar cambios</button>
-        <button type="button" id="btn-cancelar-ingresos" class="btn btn-secundario">Cancelar</button>
-      `
-      : `<button type="button" id="btn-editar-ingresos" class="btn-editar">Editar ingresos</button>`;
-  }
-
-  return `
-    <section class="tarjeta">
-      <h3>Ingresos del día${estado.esCargaManual ? ' (carga manual)' : ''}</h3>
-      <form id="form-ingresos">
-        <table class="tabla-simple tabla-ingresos-salidas">
-          <thead><tr><th>Descripción</th><th>Valor</th></tr></thead>
-          <tbody>
-            ${filas}
-            ${filaDineroBase}
-            <tr class="fila-total">
-              <td>Total Ingresos</td>
-              <td class="monto total-ingresos">${formatCOP(totalIngresos)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </form>
-      <div class="acciones-tarjeta">${botones}</div>
-    </section>
-  `;
-}
-
-function renderSalidas() {
-  const v = estado.ventaDiaria;
-  const bloqueado = v.enviado;
-  const editable = !bloqueado && estado.modoEdicionSalidas;
-  const totalSalidas = estado.salidas.reduce((acc, s) => acc + Number(s.valor || 0), 0);
-  const colspanVacio = editable ? 4 : 3;
-
-  let botones = '';
-  if (!bloqueado) {
-    botones = editable
-      ? `
-        <button type="button" id="btn-guardar-salidas" class="btn btn-primario">Guardar cambios</button>
-        <button type="button" id="btn-cancelar-salidas" class="btn btn-secundario">Cancelar</button>
-      `
-      : `<button type="button" id="btn-editar-salidas" class="btn-editar">Editar salidas</button>`;
-  }
-
-  return `
-    <section class="tarjeta">
-      <h3>Salidas del día</h3>
-      <table class="tabla-simple tabla-ingresos-salidas">
-        <thead>
-          <tr><th>Descripción</th><th>Valor</th><th>Método</th>${editable ? '<th></th>' : ''}</tr>
-        </thead>
-        <tbody>
-          ${
-            estado.salidas.length
-              ? estado.salidas.map((s) => renderFilaSalida(s, editable)).join('')
-              : `<tr><td colspan="${colspanVacio}" class="mensaje-vacio">Sin salidas registradas.</td></tr>`
-          }
-          <tr class="fila-total">
-            <td>Total Salidas</td>
-            <td class="monto total-salidas">${formatCOP(totalSalidas)}</td>
-            <td></td>
-            ${editable ? '<td></td>' : ''}
-          </tr>
-        </tbody>
-      </table>
-      ${editable ? renderFormularioNuevaSalida() : ''}
-      <div class="acciones-tarjeta">${botones}</div>
-    </section>
   `;
 }
 
@@ -476,63 +390,7 @@ function renderAccionesFinales() {
   `;
 }
 
-function enlazarEventos(container) {
-  const formIngresos = container.querySelector('#form-ingresos');
-  if (formIngresos) {
-    formIngresos.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      await guardarIngresos(container, formIngresos);
-    });
-  }
-  const btnEditarIngresos = container.querySelector('#btn-editar-ingresos');
-  if (btnEditarIngresos) {
-    btnEditarIngresos.addEventListener('click', () => {
-      estado.modoEdicionIngresos = true;
-      pintarContenido(container);
-    });
-  }
-  const btnCancelarIngresos = container.querySelector('#btn-cancelar-ingresos');
-  if (btnCancelarIngresos) {
-    btnCancelarIngresos.addEventListener('click', () => {
-      estado.modoEdicionIngresos = false;
-      pintarContenido(container);
-    });
-  }
-
-  const formSalida = container.querySelector('#form-salida');
-  if (formSalida) {
-    formSalida.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      await agregarSalida(container, formSalida);
-    });
-  }
-
-  const btnEditarSalidas = container.querySelector('#btn-editar-salidas');
-  if (btnEditarSalidas) {
-    btnEditarSalidas.addEventListener('click', () => {
-      estado.modoEdicionSalidas = true;
-      pintarContenido(container);
-    });
-  }
-  const btnCancelarSalidas = container.querySelector('#btn-cancelar-salidas');
-  if (btnCancelarSalidas) {
-    btnCancelarSalidas.addEventListener('click', () => {
-      estado.modoEdicionSalidas = false;
-      pintarContenido(container);
-    });
-  }
-  const btnGuardarSalidas = container.querySelector('#btn-guardar-salidas');
-  if (btnGuardarSalidas) {
-    btnGuardarSalidas.addEventListener('click', () => guardarTodasLasSalidas(container));
-  }
-
-  container.querySelectorAll('.btn-eliminar-salida').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      if (!confirm('¿Eliminar esta salida?')) return;
-      await eliminarSalida(container, btn.dataset.id);
-    });
-  });
-
+function enlazarEventosPagina(container) {
   const btnTransferir = container.querySelector('#btn-transferir-cuentas');
   if (btnTransferir) btnTransferir.addEventListener('click', () => abrirModalTransferencia(container));
 
@@ -549,28 +407,309 @@ function enlazarEventos(container) {
   if (btnExcel) btnExcel.addEventListener('click', exportarExcel);
 }
 
-async function guardarIngresos(container, form) {
+// ---------------------------------------------------------------------
+// Asistente "Diligenciar Registro Diario" (modal con 4 pasos)
+// ---------------------------------------------------------------------
+
+function abrirWizard(container) {
+  estado.wizardPaso = 1;
+  estado.modoEdicionSalidas = false;
+  estado.mostrarFormNuevaSalida = false;
+  renderWizard(container);
+}
+
+function cerrarWizard(container) {
+  document.querySelector('.wizard-overlay')?.remove();
+  cargarYPintar(container);
+}
+
+function renderWizard(container) {
+  let overlay = document.querySelector('.wizard-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.className = 'modal-overlay wizard-overlay';
+    document.body.appendChild(overlay);
+  }
+
+  overlay.innerHTML = `
+    <div class="modal-caja modal-caja-ancha modal-wizard">
+      ${renderWizardHeader()}
+      <div class="wizard-cuerpo">${renderWizardPaso()}</div>
+    </div>
+  `;
+
+  overlay.onclick = (e) => {
+    if (e.target === overlay) cerrarWizard(container);
+  };
+
+  enlazarEventosWizard(container, overlay);
+  overlay.querySelectorAll('.input-moneda input').forEach(activarInputMoneda);
+  if (estado.wizardPaso === 1) activarSubtotalIngresosEnVivo(overlay);
+}
+
+function renderWizardHeader() {
+  const habilitado = (n) => n === 1 || !!estado.ventaDiaria;
+  return `
+    <div class="wizard-header">
+      <h3>Diligenciar Registro Diario — ${estado.fecha}</h3>
+      <button type="button" class="wizard-cerrar" id="btn-cerrar-wizard" aria-label="Cerrar">×</button>
+    </div>
+    <div class="wizard-pasos">
+      ${PASOS_WIZARD.map(
+        (p) => `
+        <button type="button" class="wizard-paso-tab ${estado.wizardPaso === p.n ? 'activo' : ''}"
+          data-paso="${p.n}" ${habilitado(p.n) ? '' : 'disabled'}>${p.n}. ${p.label}</button>
+      `
+      ).join('')}
+    </div>
+  `;
+}
+
+function renderWizardPaso() {
+  switch (estado.wizardPaso) {
+    case 1:
+      return renderPasoIngresos();
+    case 2:
+      return renderPasoSalidas();
+    case 3:
+      return renderPasoComentarios();
+    case 4:
+      return renderPasoConsignacion();
+    default:
+      return '';
+  }
+}
+
+function renderPasoIngresos() {
+  const v = estado.ventaDiaria;
+  const totalIngresos = v ? METODOS_INGRESO.reduce((acc, m) => acc + Number(v[m.campo] || 0), 0) : 0;
+
+  const filas = METODOS_INGRESO.map(
+    (m) => `
+    <tr>
+      <td>${m.label}</td>
+      <td>${crearCeldaMoneda(m.campo, v?.[m.campo], '')}</td>
+    </tr>`
+  ).join('');
+
+  return `
+    <p class="wizard-instruccion">Registra cada método de pago. El subtotal se va sumando a medida que escribes en cada casilla.</p>
+    <form id="form-wizard-ingresos">
+      <table class="tabla-simple tabla-ingresos-salidas">
+        <thead><tr><th>Descripción</th><th>Valor</th></tr></thead>
+        <tbody>
+          ${filas}
+          <tr class="fila-secundaria">
+            <td>Dinero base (para vueltas)</td>
+            <td>${crearCeldaMoneda('dinero_base', v?.dinero_base, '')}</td>
+          </tr>
+          <tr class="fila-total">
+            <td>Subtotal Ingresos</td>
+            <td class="monto" id="wizard-subtotal-ingresos">${formatCOP(totalIngresos)}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="acciones-tarjeta wizard-acciones-paso">
+        <button type="submit" class="btn btn-primario">Guardar ingresos</button>
+      </div>
+    </form>
+  `;
+}
+
+function activarSubtotalIngresosEnVivo(overlay) {
+  const subtotalEl = overlay.querySelector('#wizard-subtotal-ingresos');
+  if (!subtotalEl) return;
+  const inputs = METODOS_INGRESO.map((m) => overlay.querySelector(`[data-campo="${m.campo}"]`));
+
+  function recalcular() {
+    const total = inputs.reduce((acc, input) => acc + (input ? parseCOP(input.value) : 0), 0);
+    subtotalEl.textContent = formatCOP(total);
+  }
+
+  inputs.forEach((input) => input && input.addEventListener('input', recalcular));
+}
+
+function renderPasoSalidas() {
+  const editableBulk = estado.modoEdicionSalidas;
+  const totalSalidas = estado.salidas.reduce((acc, s) => acc + Number(s.valor || 0), 0);
+  const colspanVacio = editableBulk ? 4 : 3;
+
+  const filasSalidas = estado.salidas.length
+    ? estado.salidas.map((s) => renderFilaSalida(s, editableBulk)).join('')
+    : `<tr><td colspan="${colspanVacio}" class="mensaje-vacio">Sin salidas registradas todavía.</td></tr>`;
+
+  let botonesSuperiores = '';
+  if (!editableBulk) {
+    botonesSuperiores = `<button type="button" id="btn-mostrar-form-salida" class="btn btn-secundario">${
+      estado.mostrarFormNuevaSalida ? '− Cerrar formulario' : '+ Añadir salida'
+    }</button>`;
+    if (estado.salidas.length > 0) {
+      botonesSuperiores += `<button type="button" id="btn-editar-salidas" class="btn-editar">Editar salidas</button>`;
+    }
+  }
+
+  const botonesInferiores = editableBulk
+    ? `
+      <button type="button" id="btn-guardar-salidas" class="btn btn-primario">Guardar ediciones</button>
+      <button type="button" id="btn-cancelar-salidas" class="btn btn-secundario">Cancelar</button>
+    `
+    : `<button type="button" id="btn-continuar-salidas" class="btn btn-primario">Guardar cambios</button>`;
+
+  return `
+    <p class="wizard-instruccion">Agrega cada salida del día con el botón "+ Añadir salida". El subtotal se va sumando según las filas que registres.</p>
+    <table class="tabla-simple tabla-ingresos-salidas">
+      <thead>
+        <tr><th>Descripción</th><th>Valor</th><th>Método</th>${editableBulk ? '<th></th>' : ''}</tr>
+      </thead>
+      <tbody>
+        ${filasSalidas}
+        <tr class="fila-total">
+          <td>Subtotal Salidas</td>
+          <td class="monto" id="wizard-subtotal-salidas">${formatCOP(totalSalidas)}</td>
+          <td></td>
+          ${editableBulk ? '<td></td>' : ''}
+        </tr>
+      </tbody>
+    </table>
+    <div class="acciones-tarjeta">${botonesSuperiores}</div>
+    ${!editableBulk && estado.mostrarFormNuevaSalida ? renderFormularioNuevaSalida() : ''}
+    <div class="acciones-tarjeta wizard-acciones-paso">${botonesInferiores}</div>
+  `;
+}
+
+function renderPasoComentarios() {
+  const v = estado.ventaDiaria;
+  return `
+    <p class="wizard-instruccion">Deja alguna nota sobre el día (opcional): algo fuera de lo común, un faltante, una aclaración para el cierre de mes, etc.</p>
+    <form id="form-wizard-comentarios">
+      <label class="wizard-label-comentarios">
+        Comentarios del día
+        <textarea id="input-comentarios" rows="5" placeholder="Opcional…">${escaparHTML(v?.comentarios)}</textarea>
+      </label>
+      <div class="acciones-tarjeta wizard-acciones-paso">
+        <button type="submit" class="btn btn-primario">Guardar y continuar</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderPasoConsignacion() {
+  const puedeTransferir = esAdmin();
+  return `
+    <p class="wizard-instruccion">¿Quiere agregar alguna consignación en efectivo del Servicentro a alguna de las cuentas?</p>
+    <div class="acciones-tarjeta wizard-acciones-consignacion">
+      <button type="button" id="btn-wizard-transferir" class="btn btn-azul" ${
+        puedeTransferir ? '' : 'disabled title="Solo un administrador puede registrar transferencias entre cuentas."'
+      }>⇄ Transferir entre cuentas</button>
+      <button type="button" id="btn-wizard-omitir" class="btn btn-secundario">Omitir</button>
+    </div>
+  `;
+}
+
+function enlazarEventosWizard(container, overlay) {
+  overlay.querySelector('#btn-cerrar-wizard')?.addEventListener('click', () => cerrarWizard(container));
+
+  overlay.querySelectorAll('.wizard-paso-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      if (tab.disabled) return;
+      estado.wizardPaso = Number(tab.dataset.paso);
+      renderWizard(container);
+    });
+  });
+
+  // Paso 1: Ingresos
+  const formIngresos = overlay.querySelector('#form-wizard-ingresos');
+  if (formIngresos) {
+    formIngresos.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await guardarIngresosWizard(container, formIngresos);
+    });
+  }
+
+  // Paso 2: Salidas
+  const btnMostrarFormSalida = overlay.querySelector('#btn-mostrar-form-salida');
+  if (btnMostrarFormSalida) {
+    btnMostrarFormSalida.addEventListener('click', () => {
+      estado.mostrarFormNuevaSalida = !estado.mostrarFormNuevaSalida;
+      renderWizard(container);
+    });
+  }
+  const btnEditarSalidas = overlay.querySelector('#btn-editar-salidas');
+  if (btnEditarSalidas) {
+    btnEditarSalidas.addEventListener('click', () => {
+      estado.modoEdicionSalidas = true;
+      renderWizard(container);
+    });
+  }
+  const btnCancelarSalidas = overlay.querySelector('#btn-cancelar-salidas');
+  if (btnCancelarSalidas) {
+    btnCancelarSalidas.addEventListener('click', () => {
+      estado.modoEdicionSalidas = false;
+      renderWizard(container);
+    });
+  }
+  const btnGuardarSalidas = overlay.querySelector('#btn-guardar-salidas');
+  if (btnGuardarSalidas) {
+    btnGuardarSalidas.addEventListener('click', () => guardarTodasLasSalidasWizard(container, overlay));
+  }
+  const btnContinuarSalidas = overlay.querySelector('#btn-continuar-salidas');
+  if (btnContinuarSalidas) {
+    btnContinuarSalidas.addEventListener('click', () => {
+      estado.wizardPaso = 3;
+      renderWizard(container);
+    });
+  }
+  const formSalida = overlay.querySelector('#form-salida');
+  if (formSalida) {
+    formSalida.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await agregarSalidaWizard(container, formSalida);
+    });
+  }
+  overlay.querySelectorAll('.btn-eliminar-salida').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('¿Eliminar esta salida?')) return;
+      await eliminarSalidaWizard(container, btn.dataset.id);
+    });
+  });
+
+  // Paso 3: Comentarios
+  const formComentarios = overlay.querySelector('#form-wizard-comentarios');
+  if (formComentarios) {
+    formComentarios.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await guardarComentariosWizard(container, formComentarios);
+    });
+  }
+
+  // Paso 4: Consignación
+  const btnWizardTransferir = overlay.querySelector('#btn-wizard-transferir');
+  if (btnWizardTransferir && !btnWizardTransferir.disabled) {
+    btnWizardTransferir.addEventListener('click', () => {
+      abrirModalTransferencia(container, { onGuardadoExitoso: () => cerrarWizard(container) });
+    });
+  }
+  const btnWizardOmitir = overlay.querySelector('#btn-wizard-omitir');
+  if (btnWizardOmitir) btnWizardOmitir.addEventListener('click', () => cerrarWizard(container));
+}
+
+async function guardarIngresosWizard(container, form) {
   const perfil = getPerfilActual();
   const valores = {};
   METODOS_INGRESO.forEach((m) => {
     const input = form.querySelector(`[data-campo="${m.campo}"]`);
     valores[m.campo] = parseCOP(input.value);
   });
-  const inputDineroBase = form.querySelector('[data-campo="dinero_base"]');
-  const dineroBase = parseCOP(inputDineroBase.value);
+  const dineroBase = parseCOP(form.querySelector('[data-campo="dinero_base"]').value);
 
   const payload = {
     fecha: estado.fecha,
     ...valores,
     dinero_base: dineroBase,
-    es_carga_manual: estado.esCargaManual,
     updated_by: perfil?.id,
     updated_at: new Date().toISOString(),
   };
-
-  if (!estado.ventaDiaria) {
-    payload.created_by = perfil?.id;
-  }
+  if (!estado.ventaDiaria) payload.created_by = perfil?.id;
 
   const { error } = await supabase.from('ventas_diarias').upsert(payload, { onConflict: 'fecha' });
 
@@ -581,11 +720,12 @@ async function guardarIngresos(container, form) {
   }
 
   mostrarToast('Ingresos guardados.', 'exito');
-  estado.modoEdicionIngresos = false;
-  await cargarYRenderizar(container);
+  await cargarDatos();
+  estado.wizardPaso = 2;
+  renderWizard(container);
 }
 
-async function agregarSalida(container, form) {
+async function agregarSalidaWizard(container, form) {
   if (!estado.ventaDiaria) return;
   const perfil = getPerfilActual();
 
@@ -613,14 +753,12 @@ async function agregarSalida(container, form) {
   }
 
   mostrarToast('Salida agregada.', 'exito');
-  estado.modoEdicionSalidas = true; // se queda en modo edición para seguir agregando/ajustando
-  await cargarYRenderizar(container);
+  await cargarDatos();
+  renderWizard(container); // el formulario queda abierto y vacío, listo para agregar otra
 }
 
-async function guardarTodasLasSalidas(container) {
-  const filas = Array.from(container.querySelectorAll('tr[data-id]')).filter((tr) =>
-    tr.querySelector('.edit-descripcion')
-  );
+async function guardarTodasLasSalidasWizard(container, overlay) {
+  const filas = Array.from(overlay.querySelectorAll('tr[data-id]')).filter((tr) => tr.querySelector('.edit-descripcion'));
 
   for (const fila of filas) {
     const id = fila.dataset.id;
@@ -644,10 +782,11 @@ async function guardarTodasLasSalidas(container) {
 
   estado.modoEdicionSalidas = false;
   mostrarToast('Salidas actualizadas.', 'exito');
-  await cargarYRenderizar(container);
+  await cargarDatos();
+  renderWizard(container);
 }
 
-async function eliminarSalida(container, id) {
+async function eliminarSalidaWizard(container, id) {
   const { error } = await supabase.from('salidas_diarias').delete().eq('id', id);
   if (error) {
     console.error('Error eliminando salida:', error);
@@ -655,7 +794,28 @@ async function eliminarSalida(container, id) {
     return;
   }
   mostrarToast('Salida eliminada.', 'exito');
-  await cargarYRenderizar(container);
+  await cargarDatos();
+  renderWizard(container);
+}
+
+async function guardarComentariosWizard(container, form) {
+  const texto = form.querySelector('#input-comentarios').value.trim();
+
+  const { error } = await supabase
+    .from('ventas_diarias')
+    .update({ comentarios: texto || null })
+    .eq('id', estado.ventaDiaria.id);
+
+  if (error) {
+    console.error('Error guardando comentarios:', error);
+    mostrarToast(`No se pudo guardar: ${error.message}`, 'error');
+    return;
+  }
+
+  mostrarToast('Comentario guardado.', 'exito');
+  await cargarDatos();
+  estado.wizardPaso = 4;
+  renderWizard(container);
 }
 
 async function eliminarDiaCompleto(container) {
@@ -679,7 +839,7 @@ async function eliminarDiaCompleto(container) {
   }
 
   mostrarToast('Registro del día eliminado.', 'exito');
-  await cargarYRenderizar(container);
+  await cargarYPintar(container);
 }
 
 async function enviarDia(container) {
@@ -709,7 +869,7 @@ async function enviarDia(container) {
   }
 
   mostrarToast('Registro del día enviado y bloqueado.', 'exito');
-  await cargarYRenderizar(container);
+  await cargarYPintar(container);
 }
 
 async function exportarPDF() {
@@ -752,6 +912,13 @@ async function exportarPDF() {
       doc.text(`Total Salidas: ${formatCOP(totalSalidas)}`, 12, y);
       y += 6;
     }
+    y += 4;
+
+    doc.text('COMENTARIOS', 10, y);
+    y += 6;
+    const lineasComentarios = doc.splitTextToSize(v.comentarios ? v.comentarios : 'Sin comentarios.', 185);
+    doc.text(lineasComentarios, 12, y);
+    y += 6 * lineasComentarios.length;
     y += 4;
 
     doc.text('PAGOS DIARIOS A PROVEEDORES', 10, y);
@@ -812,6 +979,7 @@ async function exportarExcel() {
       { concepto: 'Efectivo neto en caja', valor: v.efectivo_neto },
       { concepto: 'Digital neto', valor: v.digital_neto },
       { concepto: 'Total venta diaria', valor: v.total_venta_diaria },
+      { concepto: 'Comentarios', valor: v.comentarios || '(sin comentarios)' },
     ]);
 
     const libro = XLSX.utils.book_new();
@@ -835,7 +1003,7 @@ async function exportarExcel() {
   }
 }
 
-function abrirModalTransferencia(container) {
+function abrirModalTransferencia(container, { onGuardadoExitoso } = {}) {
   const contenido = `
     <h3>Transferir entre cuentas propias</h3>
     <form class="form-transferencia-modal form-grid">
@@ -873,7 +1041,9 @@ function abrirModalTransferencia(container) {
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `<div class="modal-caja">${contenido}</div>`;
   document.body.appendChild(overlay);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
   overlay.querySelectorAll('.input-moneda input').forEach(activarInputMoneda);
 
   const form = overlay.querySelector('.form-transferencia-modal');
@@ -882,7 +1052,10 @@ function abrirModalTransferencia(container) {
   const enviar = async (e) => {
     if (e) e.preventDefault();
     const exito = await guardarTransferenciaCuentas(form);
-    if (exito) overlay.remove();
+    if (exito) {
+      overlay.remove();
+      if (onGuardadoExitoso) onGuardadoExitoso();
+    }
   };
   form.addEventListener('submit', enviar);
   overlay.querySelector('.btn-modal-guardar-transferencia').addEventListener('click', enviar);
