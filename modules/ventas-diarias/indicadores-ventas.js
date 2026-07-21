@@ -5,8 +5,17 @@
 // Trae TODO el historial de ventas_diarias_totales una sola vez (el volumen
 // de un servicentro es pequeño — unos cientos de filas al año — así que no
 // hace falta paginar ni agregar en el servidor) y agrupa/filtra en el
-// cliente para: desglose por método de pago del rango seleccionado, cierre
-// neto del período, y comparativo mensual histórico.
+// cliente para: KPIs principales, participación por método de pago (dona),
+// facturación mes a mes (barras), cierre neto del período y comparativo
+// mensual histórico.
+//
+// Gráficas con Chart.js (cargado por CDN solo cuando se abre este módulo),
+// mismo patrón que ya usa Indicadores de Pagos.
+//
+// El calendario de Registro Diario (con punto naranja/verde por día) ya
+// muestra de un vistazo qué días quedaron guardados pero no enviados, así
+// que esa tarjeta se quitó de aquí para no duplicar la misma información
+// dos veces.
 
 import { registerModule } from '../../core/modules-registry.js';
 import { supabase } from '../../core/supabase-client.js';
@@ -22,27 +31,31 @@ const METODOS = [
   { campo: 'ventas_transferencia_bancodebogota', label: 'Transferencia Banco de Bogotá' },
 ];
 
+// Misma paleta que ya usa Indicadores de Pagos para sus gráficas, para que
+// los colores signifiquen lo mismo en toda la herramienta.
+const COLORES_METODOS = ['#1e4e8c', '#1e8e5a', '#d32f2f', '#c77c11', '#6b6b6b', '#163a68'];
+
 const AÑOS = [2026, 2027, 2028];
 
 const PERIODOS = [
-  { value: '1', label: 'Enero', mesInicio: 1, mesFin: 1 },
-  { value: '2', label: 'Febrero', mesInicio: 2, mesFin: 2 },
-  { value: '3', label: 'Marzo', mesInicio: 3, mesFin: 3 },
-  { value: '4', label: 'Abril', mesInicio: 4, mesFin: 4 },
-  { value: '5', label: 'Mayo', mesInicio: 5, mesFin: 5 },
-  { value: '6', label: 'Junio', mesInicio: 6, mesFin: 6 },
-  { value: '7', label: 'Julio', mesInicio: 7, mesFin: 7 },
-  { value: '8', label: 'Agosto', mesInicio: 8, mesFin: 8 },
-  { value: '9', label: 'Septiembre', mesInicio: 9, mesFin: 9 },
-  { value: '10', label: 'Octubre', mesInicio: 10, mesFin: 10 },
-  { value: '11', label: 'Noviembre', mesInicio: 11, mesFin: 11 },
-  { value: '12', label: 'Diciembre', mesInicio: 12, mesFin: 12 },
-  { value: 'q1', label: 'Q1 (Ene-Mar)', mesInicio: 1, mesFin: 3 },
-  { value: 'q2', label: 'Q2 (Abr-Jun)', mesInicio: 4, mesFin: 6 },
-  { value: 'q3', label: 'Q3 (Jul-Sep)', mesInicio: 7, mesFin: 9 },
-  { value: 'q4', label: 'Q4 (Oct-Dic)', mesInicio: 10, mesFin: 12 },
-  { value: 's1', label: 'Semestre 1', mesInicio: 1, mesFin: 6 },
-  { value: 's2', label: 'Semestre 2', mesInicio: 7, mesFin: 12 },
+  { value: '1', label: 'Ene', mesInicio: 1, mesFin: 1 },
+  { value: '2', label: 'Feb', mesInicio: 2, mesFin: 2 },
+  { value: '3', label: 'Mar', mesInicio: 3, mesFin: 3 },
+  { value: '4', label: 'Abr', mesInicio: 4, mesFin: 4 },
+  { value: '5', label: 'May', mesInicio: 5, mesFin: 5 },
+  { value: '6', label: 'Jun', mesInicio: 6, mesFin: 6 },
+  { value: '7', label: 'Jul', mesInicio: 7, mesFin: 7 },
+  { value: '8', label: 'Ago', mesInicio: 8, mesFin: 8 },
+  { value: '9', label: 'Sep', mesInicio: 9, mesFin: 9 },
+  { value: '10', label: 'Oct', mesInicio: 10, mesFin: 10 },
+  { value: '11', label: 'Nov', mesInicio: 11, mesFin: 11 },
+  { value: '12', label: 'Dic', mesInicio: 12, mesFin: 12 },
+  { value: 'q1', label: 'Q1', mesInicio: 1, mesFin: 3 },
+  { value: 'q2', label: 'Q2', mesInicio: 4, mesFin: 6 },
+  { value: 'q3', label: 'Q3', mesInicio: 7, mesFin: 9 },
+  { value: 'q4', label: 'Q4', mesInicio: 10, mesFin: 12 },
+  { value: 's1', label: 'Sem. 1', mesInicio: 1, mesFin: 6 },
+  { value: 's2', label: 'Sem. 2', mesInicio: 7, mesFin: 12 },
   { value: 'anio', label: 'Año completo', mesInicio: 1, mesFin: 12 },
 ];
 
@@ -57,6 +70,11 @@ const estado = {
   anioSeleccionado: new Date().getFullYear(),
   periodoSeleccionado: String(new Date().getMonth() + 1),
 };
+
+// Instancias de Chart.js -- se destruyen antes de re-crearlas en cada
+// repintado para no acumular gráficas fantasma sobre el mismo canvas.
+let graficoComparativoMensual = null;
+let graficoDesglose = null;
 
 function primerDiaMesActualISO() {
   const hoy = new Date();
@@ -99,20 +117,37 @@ async function cargarYRenderizar(container) {
   }
 
   estado.todasLasFilas = data || [];
-  pintarContenido(container);
+  await pintarContenido(container);
 }
 
 function filasDelRango() {
   return estado.todasLasFilas.filter((f) => f.fecha >= estado.desde && f.fecha <= estado.hasta);
 }
 
-function pintarContenido(container) {
+// Agrupa el histórico completo por mes (YYYY-MM) -- la usan tanto la
+// gráfica de barras como la tabla de comparativo mensual, cada una en el
+// orden que le conviene (la gráfica de más viejo a más nuevo, para leer la
+// tendencia de izquierda a derecha; la tabla al revés, para ver lo más
+// reciente arriba).
+function calcularComparativoMensual() {
+  const porMes = {};
+  estado.todasLasFilas.forEach((f) => {
+    const clave = f.fecha.slice(0, 7);
+    if (!porMes[clave]) porMes[clave] = { total: 0, efectivoNeto: 0, digitalNeto: 0 };
+    porMes[clave].total += Number(f.total_venta_diaria || 0);
+    porMes[clave].efectivoNeto += Number(f.efectivo_neto || 0);
+    porMes[clave].digitalNeto += Number(f.digital_neto || 0);
+  });
+  return porMes;
+}
+
+async function pintarContenido(container) {
   const contenido = container.querySelector('#indicadores-contenido');
 
   contenido.innerHTML = `
+    ${renderKpisPrincipales()}
     ${renderFiltros()}
     ${estado.todasLasFilas.length === 0 ? '<p class="mensaje-vacio">Todavía no hay ventas registradas.</p>' : ''}
-    ${estado.todasLasFilas.length > 0 ? renderDiasPendientes() : ''}
     ${estado.todasLasFilas.length > 0 ? renderDesglose() : ''}
     ${estado.todasLasFilas.length > 0 ? renderCierreNeto() : ''}
     ${estado.todasLasFilas.length > 0 ? renderTablaDiaria() : ''}
@@ -120,44 +155,57 @@ function pintarContenido(container) {
   `;
 
   enlazarEventos(container);
+  if (estado.todasLasFilas.length > 0) await dibujarGraficas(container);
 }
 
-function renderDiasPendientes() {
-  const pendientes = estado.todasLasFilas.filter((f) => !f.enviado);
-  if (pendientes.length === 0) {
-    return `<div class="aviso-ok">✔ No hay días pendientes de enviar. Todo está al día.</div>`;
-  }
+// Tarjeta verde con la venta del mes en curso, visible siempre al abrir la
+// pestaña -- no depende de los filtros de período seleccionados abajo.
+function renderKpisPrincipales() {
+  const mesActualClave = hoyISO().slice(0, 7);
+  const filasMesActual = estado.todasLasFilas.filter((f) => f.fecha.slice(0, 7) === mesActualClave);
+  const totalMesActual = filasMesActual.reduce((acc, f) => acc + Number(f.total_venta_diaria || 0), 0);
+
+  const filas = filasDelRango();
+  const totalPeriodo = filas.reduce((acc, f) => acc + Number(f.total_venta_diaria || 0), 0);
+  const diasConDatos = filas.length;
+  const promedioDiario = diasConDatos > 0 ? totalPeriodo / diasConDatos : 0;
+
   return `
-    <section class="tarjeta">
-      <h3>⚠ Días guardados pero no enviados (${pendientes.length})</h3>
-      <table class="tabla-simple">
-        <thead><tr><th>Fecha</th><th>Total venta diaria</th></tr></thead>
-        <tbody>
-          ${pendientes
-            .map((f) => `<tr><td>${f.fecha}</td><td class="monto">${formatCOP(f.total_venta_diaria)}</td></tr>`)
-            .join('')}
-        </tbody>
-      </table>
-    </section>
+    <div class="grid-tres-columnas">
+      <div class="stat-card stat-card-verde">
+        <div class="stat-card-label">Venta del mes actual</div>
+        <div class="stat-card-valor">${formatCOP(totalMesActual)}</div>
+        <div class="stat-card-subtitulo">${nombreMes(mesActualClave)}</div>
+      </div>
+      <div class="stat-card stat-card-azul">
+        <div class="stat-card-label">Venta del período seleccionado</div>
+        <div class="stat-card-valor">${formatCOP(totalPeriodo)}</div>
+        <div class="stat-card-subtitulo">${estado.desde} a ${estado.hasta}</div>
+      </div>
+      <div class="stat-card stat-card-naranja">
+        <div class="stat-card-label">Promedio diario del período</div>
+        <div class="stat-card-valor">${formatCOP(promedioDiario)}</div>
+        <div class="stat-card-subtitulo">${diasConDatos} día(s) con registro</div>
+      </div>
+    </div>
   `;
 }
 
+// Selector de año y de período: pastillas (botones) en vez de
+// desplegables, para elegir mes/trimestre/semestre/año con un solo clic.
 function renderFiltros() {
   return `
     <section class="tarjeta">
-      <div class="controles-fecha">
-        <label>
-          Año
-          <select id="filtro-anio">
-            ${AÑOS.map((a) => `<option value="${a}" ${estado.anioSeleccionado === a ? 'selected' : ''}>${a}</option>`).join('')}
-          </select>
-        </label>
-        <label>
-          Período
-          <select id="filtro-periodo">
-            ${PERIODOS.map((p) => `<option value="${p.value}" ${estado.periodoSeleccionado === p.value ? 'selected' : ''}>${p.label}</option>`).join('')}
-          </select>
-        </label>
+      <div class="pastillas-fila">
+        ${AÑOS.map(
+          (a) => `<button type="button" class="pastilla pastilla-anio ${estado.anioSeleccionado === a ? 'activo' : ''}" data-anio="${a}">${a}</button>`
+        ).join('')}
+      </div>
+      <div class="pastillas-fila">
+        ${PERIODOS.map(
+          (p) =>
+            `<button type="button" class="pastilla pastilla-mes ${estado.periodoSeleccionado === p.value ? 'activo' : ''}" data-periodo="${p.value}">${p.label}</button>`
+        ).join('')}
       </div>
       <div class="controles-fecha">
         <label>Desde <input type="date" id="filtro-desde" value="${estado.desde}" /></label>
@@ -170,6 +218,8 @@ function renderFiltros() {
   `;
 }
 
+// Participación por método de pago del período seleccionado: dona +
+// tabla numérica al lado (los 6 métodos existentes en Servicentro B&B).
 function renderDesglose() {
   const filas = filasDelRango();
   const totales = METODOS.map((m) => ({
@@ -180,33 +230,32 @@ function renderDesglose() {
 
   return `
     <section class="tarjeta">
-      <h3>Desglose por método de pago — ${estado.desde} a ${estado.hasta}</h3>
-      <table class="tabla-simple">
-        <thead><tr><th>Método</th><th>Total</th><th>% participación</th></tr></thead>
-        <tbody>
-          ${totales
-            .map((m) => {
-              const pct = totalBruto > 0 ? ((m.total / totalBruto) * 100).toFixed(1) : '0.0';
-              return `
-              <tr>
-                <td>${m.label}</td>
-                <td class="monto">${formatCOP(m.total)}</td>
-                <td>
-                  <div class="barra-porcentaje">
-                    <div class="barra-porcentaje-relleno" style="width:${pct}%"></div>
-                    <span>${pct}%</span>
-                  </div>
-                </td>
-              </tr>`;
-            })
-            .join('')}
-          <tr class="fila-total">
-            <td>Total bruto</td>
-            <td class="monto">${formatCOP(totalBruto)}</td>
-            <td></td>
-          </tr>
-        </tbody>
-      </table>
+      <h3>Participación por método de pago — ${estado.desde} a ${estado.hasta}</h3>
+      <div class="grid-dos-columnas">
+        <div>
+          ${
+            totalBruto > 0
+              ? '<canvas id="grafico-desglose-metodos" height="220"></canvas>'
+              : '<p class="mensaje-vacio">Sin ventas en este período.</p>'
+          }
+        </div>
+        <table class="tabla-simple">
+          <thead><tr><th>Método</th><th>Total</th><th>%</th></tr></thead>
+          <tbody>
+            ${totales
+              .map((m) => {
+                const pct = totalBruto > 0 ? ((m.total / totalBruto) * 100).toFixed(1) : '0.0';
+                return `<tr><td>${m.label}</td><td class="monto">${formatCOP(m.total)}</td><td>${pct}%</td></tr>`;
+              })
+              .join('')}
+            <tr class="fila-total">
+              <td>Total bruto</td>
+              <td class="monto">${formatCOP(totalBruto)}</td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
   `;
 }
@@ -232,37 +281,25 @@ function renderCierreNeto() {
   `;
 }
 
+// Facturación mes a mes: gráfica de barras (más vieja a más nueva) arriba,
+// tabla numérica (más reciente arriba) abajo para consulta rápida.
 function renderComparativoMensual() {
-  const porMes = {};
-  estado.todasLasFilas.forEach((f) => {
-    const clave = f.fecha.slice(0, 7); // YYYY-MM
-    if (!porMes[clave]) porMes[clave] = { total: 0, efectivoNeto: 0, digitalNeto: 0 };
-    porMes[clave].total += Number(f.total_venta_diaria || 0);
-    porMes[clave].efectivoNeto += Number(f.efectivo_neto || 0);
-    porMes[clave].digitalNeto += Number(f.digital_neto || 0);
-  });
-
-  const meses = Object.keys(porMes).sort((a, b) => b.localeCompare(a)); // más reciente primero
-  const maxTotal = Math.max(...meses.map((m) => porMes[m].total), 1);
+  const porMes = calcularComparativoMensual();
+  const clavesDesc = Object.keys(porMes).sort((a, b) => b.localeCompare(a));
 
   return `
     <section class="tarjeta">
-      <h3>Comparativo mensual (histórico completo)</h3>
+      <h3>Facturación mes a mes (histórico completo)</h3>
+      <canvas id="grafico-comparativo-mensual" height="90"></canvas>
       <table class="tabla-simple">
         <thead><tr><th>Mes</th><th>Total ventas</th><th>Efectivo neto</th><th>Digital neto</th></tr></thead>
         <tbody>
-          ${meses
+          ${clavesDesc
             .map((clave) => {
               const m = porMes[clave];
-              const anchoBarra = ((m.total / maxTotal) * 100).toFixed(1);
               return `
               <tr>
-                <td>
-                  ${nombreMes(clave)}
-                  <div class="barra-porcentaje barra-mes">
-                    <div class="barra-porcentaje-relleno" style="width:${anchoBarra}%"></div>
-                  </div>
-                </td>
+                <td>${nombreMes(clave)}</td>
                 <td class="monto">${formatCOP(m.total)}</td>
                 <td class="monto monto-ingreso">${formatCOP(m.efectivoNeto)}</td>
                 <td class="monto monto-ingreso">${formatCOP(m.digitalNeto)}</td>
@@ -360,22 +397,80 @@ function renderTablaDiaria() {
   `;
 }
 
-function enlazarEventos(container) {
-  const inputAnio = container.querySelector('#filtro-anio');
-  const inputPeriodo = container.querySelector('#filtro-periodo');
+async function dibujarGraficas(container) {
+  try {
+    const { Chart, registerables } = await import('https://cdn.jsdelivr.net/npm/chart.js@4/+esm');
+    Chart.register(...registerables);
 
+    if (graficoComparativoMensual) graficoComparativoMensual.destroy();
+    if (graficoDesglose) graficoDesglose.destroy();
+
+    // Barras mes a mes: verde si ese mes vendió por encima del promedio del
+    // histórico mostrado, rojo si quedó por debajo (no existe hoy una meta
+    // de ventas definida en Servicentro B&B, así que se compara contra el
+    // propio promedio en vez de inventar un umbral).
+    const porMes = calcularComparativoMensual();
+    const clavesAsc = Object.keys(porMes).sort((a, b) => a.localeCompare(b));
+    const ctxComparativo = container.querySelector('#grafico-comparativo-mensual');
+    if (ctxComparativo && clavesAsc.length > 0) {
+      const valores = clavesAsc.map((c) => porMes[c].total);
+      const promedio = valores.reduce((acc, v) => acc + v, 0) / valores.length;
+      const colores = valores.map((v) => (v >= promedio ? '#1e8e5a' : '#d32f2f'));
+
+      graficoComparativoMensual = new Chart(ctxComparativo, {
+        type: 'bar',
+        data: {
+          labels: clavesAsc.map((c) => nombreMes(c)),
+          datasets: [{ label: 'Total venta diaria', data: valores, backgroundColor: colores }],
+        },
+        options: {
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true } },
+        },
+      });
+    }
+
+    // Dona: participación de cada método de pago en el período filtrado.
+    const filas = filasDelRango();
+    const totales = METODOS.map((m) => ({ ...m, total: filas.reduce((acc, f) => acc + Number(f[m.campo] || 0), 0) }));
+    const totalBruto = totales.reduce((acc, m) => acc + m.total, 0);
+    const ctxDesglose = container.querySelector('#grafico-desglose-metodos');
+    if (ctxDesglose && totalBruto > 0) {
+      graficoDesglose = new Chart(ctxDesglose, {
+        type: 'doughnut',
+        data: {
+          labels: totales.map((m) => m.label),
+          datasets: [{ data: totales.map((m) => m.total), backgroundColor: COLORES_METODOS }],
+        },
+      });
+    }
+  } catch (err) {
+    console.error('Error cargando gráficas de Indicadores de Ventas:', err);
+  }
+}
+
+function enlazarEventos(container) {
   function aplicarPeriodoRapido() {
-    const anio = Number(inputAnio.value);
-    const periodo = PERIODOS.find((p) => p.value === inputPeriodo.value);
-    estado.anioSeleccionado = anio;
-    estado.periodoSeleccionado = inputPeriodo.value;
+    const anio = estado.anioSeleccionado;
+    const periodo = PERIODOS.find((p) => p.value === estado.periodoSeleccionado);
     estado.desde = `${anio}-${String(periodo.mesInicio).padStart(2, '0')}-01`;
     estado.hasta = `${anio}-${String(periodo.mesFin).padStart(2, '0')}-${String(ultimoDiaDeMes(anio, periodo.mesFin)).padStart(2, '0')}`;
     pintarContenido(container);
   }
 
-  if (inputAnio) inputAnio.addEventListener('change', aplicarPeriodoRapido);
-  if (inputPeriodo) inputPeriodo.addEventListener('change', aplicarPeriodoRapido);
+  container.querySelectorAll('.pastilla-anio').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      estado.anioSeleccionado = Number(btn.dataset.anio);
+      aplicarPeriodoRapido();
+    });
+  });
+
+  container.querySelectorAll('.pastilla-mes').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      estado.periodoSeleccionado = btn.dataset.periodo;
+      aplicarPeriodoRapido();
+    });
+  });
 
   const inputDesde = container.querySelector('#filtro-desde');
   const inputHasta = container.querySelector('#filtro-hasta');
@@ -394,14 +489,10 @@ function enlazarEventos(container) {
   }
 
   const btnExportar = container.querySelector('#btn-exportar-indicadores');
-  if (btnExportar) {
-    btnExportar.addEventListener('click', exportarExcel);
-  }
+  if (btnExportar) btnExportar.addEventListener('click', exportarExcel);
 
   const btnExportarTablaDiaria = container.querySelector('#btn-exportar-tabla-diaria');
-  if (btnExportarTablaDiaria) {
-    btnExportarTablaDiaria.addEventListener('click', exportarTablaDiaria);
-  }
+  if (btnExportarTablaDiaria) btnExportarTablaDiaria.addEventListener('click', exportarTablaDiaria);
 }
 
 async function exportarExcel() {
