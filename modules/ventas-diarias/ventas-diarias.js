@@ -34,7 +34,7 @@ import {
   formatearMientrasEscribe,
   activarInputMoneda,
 } from '../../core/helpers/currency.js';
-import { hoyISO } from '../../core/helpers/dates.js';
+import { hoyISO, rangoDeMes } from '../../core/helpers/dates.js';
 import { mostrarToast, mostrarConfirmacion } from '../../core/ui.js';
 
 // Orden pedido para el paso de Ingresos del asistente: efectivo, nequi,
@@ -66,6 +66,11 @@ const PASOS_WIZARD = [
   { n: 4, label: 'Consignación' },
 ];
 
+// Calendario lateral (ver renderMiniCalendario) -- misma idea que el de
+// Agenda de Pagos, duplicado aquí en vez de compartido porque no existe
+// hoy un helper común para esto en core/helpers.
+const DIAS_SEMANA = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+
 const estado = {
   fecha: hoyISO(),
   ventaDiaria: null,
@@ -75,6 +80,8 @@ const estado = {
   modoEdicionSalidas: false,
   mostrarFormNuevaSalida: false,
   wizardPaso: 1,
+  mesCalendario: hoyISO().slice(0, 7), // calendario lateral (solo admin)
+  diasCalendario: [],
 };
 
 function esAdmin() {
@@ -96,12 +103,29 @@ async function render(container) {
   estado.modoEdicionSalidas = false;
   estado.mostrarFormNuevaSalida = false;
   estado.wizardPaso = 1;
+  estado.mesCalendario = hoyISO().slice(0, 7);
 
-  container.innerHTML = `
-    <h2>Registro Diario</h2>
-    <div id="ventas-diarias-controles"></div>
-    <div id="ventas-diarias-contenido">Cargando…</div>
-  `;
+  // El calendario lateral (con los puntos de enviado/pendiente) es solo
+  // para admin: el operativo solo puede trabajar el día de hoy (RLS,
+  // sql/002), así que un calendario de navegación no le sirve de nada --
+  // y peor, le mostraría casi todos los días en blanco (sin poder verlos
+  // por RLS) aunque sí tengan datos, lo cual confunde más de lo que ayuda.
+  container.innerHTML = esAdmin()
+    ? `
+      <h2>Registro Diario</h2>
+      <div class="agenda-layout">
+        <aside class="agenda-sidebar" id="ventas-diarias-calendario"></aside>
+        <div class="agenda-principal">
+          <div id="ventas-diarias-controles"></div>
+          <div id="ventas-diarias-contenido">Cargando…</div>
+        </div>
+      </div>
+    `
+    : `
+      <h2>Registro Diario</h2>
+      <div id="ventas-diarias-controles"></div>
+      <div id="ventas-diarias-contenido">Cargando…</div>
+    `;
 
   await cargarYPintar(container);
 }
@@ -109,9 +133,14 @@ async function render(container) {
 async function cargarYPintar(container) {
   const contenido = container.querySelector('#ventas-diarias-contenido');
   if (contenido) contenido.innerHTML = '<p class="mensaje-vacio">Cargando…</p>';
-  await cargarDatos();
+
+  const tareas = [cargarDatos()];
+  if (esAdmin()) tareas.push(cargarDiasCalendario());
+  await Promise.all(tareas);
+
   pintarControles(container);
   pintarPagina(container);
+  if (esAdmin()) pintarCalendario(container);
 }
 
 async function cargarDatos() {
@@ -163,6 +192,114 @@ async function cargarDatos() {
   }
 }
 
+// Calendario lateral (solo admin): un punto por día -- verde si ya se
+// envió, naranja si está guardado pero pendiente de enviar, sin punto si
+// no se ha diligenciado nada ese día. Se consulta solo el mes que se está
+// mostrando (no todo el histórico), igual que ya se corrigió en Saldos y
+// Cuentas, para que esto no se ponga lento con el tiempo.
+async function cargarDiasCalendario() {
+  const [anio, mes] = estado.mesCalendario.split('-').map(Number);
+  const { inicio, fin } = rangoDeMes(anio, mes);
+
+  const { data, error } = await supabase.from('ventas_diarias_totales').select('fecha, enviado').gte('fecha', inicio).lte('fecha', fin);
+
+  if (error) {
+    console.error('Error cargando calendario de Registro Diario:', error);
+    estado.diasCalendario = [];
+    return;
+  }
+  estado.diasCalendario = data || [];
+}
+
+function sumarMeses(mesISO, delta) {
+  const [anio, mes] = mesISO.split('-').map(Number);
+  const fecha = new Date(anio, mes - 1 + delta, 1);
+  return `${fecha.getFullYear()}-${String(fecha.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function renderMiniCalendario() {
+  const [anioStr, mesStr] = estado.mesCalendario.split('-');
+  const anio = Number(anioStr);
+  const mes = Number(mesStr);
+  const primerDiaMes = new Date(anio, mes - 1, 1);
+  const totalDias = new Date(anio, mes, 0).getDate();
+  const offset = (primerDiaMes.getDay() + 6) % 7;
+  const nombreMesTitulo = primerDiaMes.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
+
+  const celdas = [];
+  for (let i = 0; i < offset; i++) celdas.push('<div class="celda-dia celda-mini celda-vacia"></div>');
+
+  for (let dia = 1; dia <= totalDias; dia++) {
+    const fechaISO = `${anioStr}-${mesStr}-${String(dia).padStart(2, '0')}`;
+    const registroDia = estado.diasCalendario.find((d) => d.fecha === fechaISO);
+    const color = registroDia ? (registroDia.enviado ? 'semaforo-verde' : 'semaforo-naranja') : '';
+    const esHoy = fechaISO === hoyISO();
+    const seleccionado = fechaISO === estado.fecha;
+    celdas.push(`
+      <button type="button" class="celda-dia celda-mini ${esHoy ? 'celda-hoy' : ''} ${seleccionado ? 'celda-seleccionada' : ''}" data-fecha="${fechaISO}">
+        <span class="numero-dia">${dia}</span>
+        ${color ? `<span class="semaforo ${color}"></span>` : ''}
+      </button>
+    `);
+  }
+
+  const titulo = nombreMesTitulo.charAt(0).toUpperCase() + nombreMesTitulo.slice(1);
+
+  return `
+    <section class="tarjeta">
+      <h3>Calendario</h3>
+      <div class="calendario-header">
+        <button type="button" id="btn-mes-anterior-registro" class="btn-editar">‹</button>
+        <strong>${titulo}</strong>
+        <button type="button" id="btn-mes-siguiente-registro" class="btn-editar">›</button>
+      </div>
+      <div class="calendario-leyenda">
+        <span><span class="semaforo semaforo-verde"></span> Enviado</span>
+        <span><span class="semaforo semaforo-naranja"></span> Pendiente</span>
+      </div>
+      <div class="calendario-grid calendario-mini-grid calendario-dias-semana">
+        ${DIAS_SEMANA.map((d) => `<div class="celda-dia-semana">${d[0]}</div>`).join('')}
+      </div>
+      <div class="calendario-grid calendario-mini-grid">${celdas.join('')}</div>
+    </section>
+  `;
+}
+
+function pintarCalendario(container) {
+  const calendario = container.querySelector('#ventas-diarias-calendario');
+  if (!calendario) return;
+  calendario.innerHTML = renderMiniCalendario();
+  enlazarEventosCalendario(container);
+}
+
+function enlazarEventosCalendario(container) {
+  const calendario = container.querySelector('#ventas-diarias-calendario');
+  if (!calendario) return;
+
+  const btnMesAnterior = calendario.querySelector('#btn-mes-anterior-registro');
+  if (btnMesAnterior) {
+    btnMesAnterior.addEventListener('click', async () => {
+      estado.mesCalendario = sumarMeses(estado.mesCalendario, -1);
+      await cargarDiasCalendario();
+      pintarCalendario(container);
+    });
+  }
+  const btnMesSiguiente = calendario.querySelector('#btn-mes-siguiente-registro');
+  if (btnMesSiguiente) {
+    btnMesSiguiente.addEventListener('click', async () => {
+      estado.mesCalendario = sumarMeses(estado.mesCalendario, 1);
+      await cargarDiasCalendario();
+      pintarCalendario(container);
+    });
+  }
+  calendario.querySelectorAll('.celda-dia[data-fecha]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      estado.fecha = btn.dataset.fecha;
+      cargarYPintar(container);
+    });
+  });
+}
+
 function pintarControles(container) {
   const controles = container.querySelector('#ventas-diarias-controles');
   const v = estado.ventaDiaria;
@@ -190,6 +327,7 @@ function pintarControles(container) {
   if (inputFecha) {
     inputFecha.addEventListener('change', (e) => {
       estado.fecha = e.target.value;
+      estado.mesCalendario = e.target.value.slice(0, 7);
       cargarYPintar(container);
     });
   }
