@@ -17,7 +17,7 @@ import { supabase } from '../../core/supabase-client.js';
 import { getPerfilActual } from '../../core/auth.js';
 import { formatCOP, parseCOP, formatearMientrasEscribe, activarInputMoneda } from '../../core/helpers/currency.js';
 import { hoyISO, primerDiaDelMes } from '../../core/helpers/dates.js';
-import { mostrarToast } from '../../core/ui.js';
+import { mostrarToast, mostrarConfirmacion } from '../../core/ui.js';
 
 const ORIGENES = {
   venta_diaria: 'Venta diaria',
@@ -75,7 +75,7 @@ async function cargarCuentas() {
 async function cargarTransferencias() {
   let query = supabase
     .from('movimientos_cuenta')
-    .select('*, cuentas(nombre)')
+    .select('*, cuentas(nombre), usuarios(nombre)')
     .eq('origen_tipo', 'transferencia_interna')
     .order('fecha', { ascending: false })
     .order('created_at', { ascending: false });
@@ -143,15 +143,38 @@ function transferenciasAgrupadas() {
 
   internas.forEach((m) => {
     const base = m.concepto.replace(/ \((salida|entrada)\)$/, '');
-    const clave = `${base}__${m.fecha}__${Math.abs(m.valor)}`;
+    // created_at entra en la clave para que dos transferencias realmente
+    // separadas (aunque tengan el mismo concepto/fecha/monto -- como el
+    // duplicado del 27 de julio) nunca se mezclen en una sola fila.
+    const clave = `${base}__${m.fecha}__${Math.abs(m.valor)}__${m.created_at}`;
     if (!grupos[clave]) {
-      grupos[clave] = { concepto: base, fecha: m.fecha, monto: Math.abs(m.valor), desde: null, hacia: null };
+      grupos[clave] = {
+        clave,
+        concepto: base,
+        fecha: m.fecha,
+        monto: Math.abs(m.valor),
+        desde: null,
+        hacia: null,
+        desdeId: null,
+        haciaId: null,
+        idSalida: null,
+        idEntrada: null,
+        creadoEn: m.created_at,
+        creadoPor: m.usuarios?.nombre || '—',
+      };
     }
-    if (Number(m.valor) < 0) grupos[clave].desde = m.cuentas?.nombre || '—';
-    else grupos[clave].hacia = m.cuentas?.nombre || '—';
+    if (Number(m.valor) < 0) {
+      grupos[clave].desde = m.cuentas?.nombre || '—';
+      grupos[clave].desdeId = m.cuenta_id;
+      grupos[clave].idSalida = m.id;
+    } else {
+      grupos[clave].hacia = m.cuentas?.nombre || '—';
+      grupos[clave].haciaId = m.cuenta_id;
+      grupos[clave].idEntrada = m.id;
+    }
   });
 
-  return Object.values(grupos).sort((a, b) => b.fecha.localeCompare(a.fecha));
+  return Object.values(grupos).sort((a, b) => b.creadoEn.localeCompare(a.creadoEn));
 }
 
 // Aviso de que, por defecto, "Movimientos entre Cuentas" solo trae el mes
@@ -163,38 +186,51 @@ function renderNotaRangoTransferencias() {
   return '<p class="mensaje-vacio">Mostrando el mes en curso. Usa los filtros de arriba para ver otros períodos.</p>';
 }
 
+function horaCorta(timestamptz) {
+  return new Date(timestamptz).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
+}
+
 function renderTarjetaTransferencias() {
   const lista = transferenciasAgrupadas();
 
   return `
     <section class="tarjeta">
       <h3>Movimientos entre Cuentas</h3>
+      <p class="mensaje-vacio">Editar o eliminar una transferencia nunca borra el registro original: se agrega un movimiento de reversión (y uno nuevo corregido, si editas) para que quede trazabilidad completa aquí mismo.</p>
       <div class="controles-fecha">
         <label>Desde <input type="date" id="filtro-desde-transferencias" value="${estado.filtroDesdeTransferencias}" /></label>
         <label>Hasta <input type="date" id="filtro-hasta-transferencias" value="${estado.filtroHastaTransferencias}" /></label>
       </div>
       ${renderNotaRangoTransferencias()}
-      <table class="tabla-simple">
-        <thead><tr><th>Fecha</th><th>Detalle</th><th>Desde</th><th>Hacia</th><th>Monto</th></tr></thead>
-        <tbody>
-          ${
-            lista.length
-              ? lista
-                  .map(
-                    (t) => `
-              <tr>
-                <td>${t.fecha}</td>
-                <td>${t.concepto}</td>
-                <td>${t.desde || '—'}</td>
-                <td>${t.hacia || '—'}</td>
-                <td class="monto">${formatCOP(t.monto)}</td>
-              </tr>`
-                  )
-                  .join('')
-              : '<tr><td colspan="5" class="mensaje-vacio">Sin transferencias entre cuentas con estos filtros.</td></tr>'
-          }
-        </tbody>
-      </table>
+      <div class="tabla-scroll">
+        <table class="tabla-simple">
+          <thead><tr><th>Fecha</th><th>Hora</th><th>Detalle</th><th>Desde</th><th>Hacia</th><th>Monto</th><th>Usuario</th><th></th></tr></thead>
+          <tbody>
+            ${
+              lista.length
+                ? lista
+                    .map(
+                      (t) => `
+                <tr>
+                  <td>${t.fecha}</td>
+                  <td>${horaCorta(t.creadoEn)}</td>
+                  <td>${t.concepto}</td>
+                  <td>${t.desde || '—'}</td>
+                  <td>${t.hacia || '—'}</td>
+                  <td class="monto">${formatCOP(t.monto)}</td>
+                  <td>${t.creadoPor}</td>
+                  <td>
+                    <button type="button" class="btn-editar-salida btn-editar-transferencia" data-clave="${t.clave}">Editar</button>
+                    <button type="button" class="btn-eliminar-salida btn-eliminar-transferencia" data-clave="${t.clave}">Eliminar</button>
+                  </td>
+                </tr>`
+                    )
+                    .join('')
+                : '<tr><td colspan="8" class="mensaje-vacio">Sin transferencias entre cuentas con estos filtros.</td></tr>'
+            }
+          </tbody>
+        </table>
+      </div>
       <div class="acciones-tarjeta">
         <button type="button" id="btn-exportar-transferencias" class="btn btn-exportar">Exportar Excel</button>
       </div>
@@ -432,6 +468,62 @@ function abrirModalTransferencia(container) {
   overlay.querySelector('.btn-modal-guardar-transferencia').addEventListener('click', enviar);
 }
 
+// Editar una transferencia ya registrada NO modifica sus 2 filas
+// originales (movimientos_cuenta es de solo-inserción, como un extracto
+// bancario -- ver sql/013): guardarEdicionTransferencia() inserta un par
+// de reversión que anula el original, más un par nuevo con los datos
+// corregidos. Las 4 filas quedan visibles en el listado como historial.
+function abrirModalEditarTransferencia(container, grupo) {
+  const contenido = `
+    <h3>Editar transferencia</h3>
+    <p class="mensaje-vacio">Esto no borra ni modifica el registro original: se agrega un movimiento de reversión y uno nuevo con los datos corregidos, ambos visibles en el listado.</p>
+    <form class="form-transferencia-modal form-grid">
+      <label>
+        Desde *
+        <select class="tr-desde" required>
+          <option value="">— Seleccionar —</option>
+          ${estado.cuentas.map((c) => `<option value="${c.id}" ${c.id === grupo.desdeId ? 'selected' : ''}>${c.nombre}</option>`).join('')}
+        </select>
+      </label>
+      <label>
+        Hacia *
+        <select class="tr-hasta" required>
+          <option value="">— Seleccionar —</option>
+          ${estado.cuentas.map((c) => `<option value="${c.id}" ${c.id === grupo.haciaId ? 'selected' : ''}>${c.nombre}</option>`).join('')}
+        </select>
+      </label>
+      <label>Fecha * <input type="date" class="tr-fecha" required value="${grupo.fecha}" /></label>
+      <label>
+        Monto *
+        <div class="input-moneda">
+          <span class="prefijo">$</span>
+          <input type="text" inputmode="numeric" placeholder="0" class="tr-monto" required value="${formatearMientrasEscribe(String(grupo.monto))}" />
+        </div>
+      </label>
+      <label>Concepto <input type="text" class="tr-concepto" placeholder="Ej. Retiro de Nequi a Bancolombia" value="${grupo.concepto}" /></label>
+    </form>
+    <div class="acciones-tarjeta">
+      <button type="button" class="btn btn-primario btn-modal-guardar-edicion">Guardar corrección</button>
+      <button type="button" class="btn btn-secundario btn-modal-cancelar-edicion">Cancelar</button>
+    </div>
+  `;
+
+  const overlay = crearOverlayModal(contenido);
+  overlay.querySelectorAll('.input-moneda input').forEach(activarInputMoneda);
+  const form = overlay.querySelector('.form-transferencia-modal');
+
+  overlay.querySelector('.btn-modal-cancelar-edicion').addEventListener('click', () => overlay.remove());
+
+  const enviar = async (e) => {
+    if (e) e.preventDefault();
+    const exito = await guardarEdicionTransferencia(container, grupo, form);
+    if (exito) overlay.remove();
+  };
+
+  form.addEventListener('submit', enviar);
+  overlay.querySelector('.btn-modal-guardar-edicion').addEventListener('click', enviar);
+}
+
 function enlazarEventos(container) {
   container.querySelectorAll('.btn-editar-saldo-inicial').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -498,6 +590,20 @@ function enlazarEventos(container) {
 
   const btnNuevaTransferencia = container.querySelector('#btn-nueva-transferencia');
   if (btnNuevaTransferencia) btnNuevaTransferencia.addEventListener('click', () => abrirModalTransferencia(container));
+
+  container.querySelectorAll('.btn-editar-transferencia').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const grupo = transferenciasAgrupadas().find((g) => g.clave === btn.dataset.clave);
+      if (grupo) abrirModalEditarTransferencia(container, grupo);
+    });
+  });
+
+  container.querySelectorAll('.btn-eliminar-transferencia').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const grupo = transferenciasAgrupadas().find((g) => g.clave === btn.dataset.clave);
+      if (grupo) await reversarTransferencia(container, grupo);
+    });
+  });
 
   const btnExportarSaldos = container.querySelector('#btn-exportar-saldos');
   if (btnExportarSaldos) btnExportarSaldos.addEventListener('click', exportarSaldosExcel);
@@ -610,6 +716,125 @@ async function guardarTransferencia(container, form) {
   return true;
 }
 
+// Inserta el par de reversión de una transferencia ya registrada (signo
+// contrario, mismas cuentas originales, fecha de HOY -- refleja cuándo se
+// hizo la corrección, no se reescribe el período original). No borra ni
+// toca las 2 filas originales.
+async function insertarReversionTransferencia(grupo, perfilId) {
+  return supabase.from('movimientos_cuenta').insert([
+    {
+      cuenta_id: grupo.desdeId,
+      fecha: hoyISO(),
+      valor: grupo.monto,
+      concepto: `↩ Reversión de: ${grupo.concepto} (entrada)`,
+      origen_tipo: 'transferencia_interna',
+      created_by: perfilId,
+    },
+    {
+      cuenta_id: grupo.haciaId,
+      fecha: hoyISO(),
+      valor: -grupo.monto,
+      concepto: `↩ Reversión de: ${grupo.concepto} (salida)`,
+      origen_tipo: 'transferencia_interna',
+      created_by: perfilId,
+    },
+  ]);
+}
+
+// "Eliminar" una transferencia = reversarla. El registro original queda
+// intacto para siempre (movimientos_cuenta es de solo-inserción, sql/013);
+// el efecto en el saldo se anula con el par de reversión, y ambos quedan
+// visibles en el listado como historial de auditoría.
+async function reversarTransferencia(container, grupo) {
+  const confirmado = await mostrarConfirmacion({
+    titulo: 'Eliminar transferencia',
+    contenidoHTML: `
+      <p>Vas a eliminar la transferencia <strong>${grupo.concepto}</strong> del ${grupo.fecha} por ${formatCOP(grupo.monto)} (${grupo.desde || '—'} → ${grupo.hacia || '—'}).</p>
+      <p>Por trazabilidad, el registro original <strong>no se borra</strong>: se agrega un movimiento de reversión que anula su efecto en el saldo, y ambos quedan visibles en este listado.</p>
+    `,
+    textoConfirmar: 'Sí, eliminar (reversar)',
+  });
+  if (!confirmado) return;
+
+  const perfil = getPerfilActual();
+  const { error } = await insertarReversionTransferencia(grupo, perfil?.id);
+
+  if (error) {
+    console.error('Error reversando transferencia:', error);
+    mostrarToast(`No se pudo eliminar: ${error.message}`, 'error');
+    return;
+  }
+
+  mostrarToast('Transferencia eliminada (reversada).', 'exito');
+  await cargarYRenderizar(container);
+}
+
+// "Editar" una transferencia = reversar el par original + registrar uno
+// nuevo con los datos corregidos. Nunca se actualizan las filas ya
+// creadas -- se insertan 4 filas en total (2 de reversión + 2 nuevas),
+// todas visibles en el listado.
+async function guardarEdicionTransferencia(container, grupo, form) {
+  const perfil = getPerfilActual();
+  const cuentaDesde = form.querySelector('.tr-desde').value;
+  const cuentaHasta = form.querySelector('.tr-hasta').value;
+  const fecha = form.querySelector('.tr-fecha').value;
+  const monto = parseCOP(form.querySelector('.tr-monto').value);
+  const conceptoBase = form.querySelector('.tr-concepto').value.trim();
+
+  if (!cuentaDesde || !cuentaHasta || !fecha || monto <= 0) {
+    mostrarToast('Todos los campos son obligatorios.', 'error');
+    return false;
+  }
+  if (cuentaDesde === cuentaHasta) {
+    mostrarToast('La cuenta de origen y destino no pueden ser la misma.', 'error');
+    return false;
+  }
+
+  const nombreDesde = estado.cuentas.find((c) => c.id === cuentaDesde)?.nombre || '';
+  const nombreHasta = estado.cuentas.find((c) => c.id === cuentaHasta)?.nombre || '';
+  const concepto = conceptoBase || `Transferencia ${nombreDesde} → ${nombreHasta}`;
+
+  const { error: errorReversion } = await insertarReversionTransferencia(grupo, perfil?.id);
+  if (errorReversion) {
+    console.error('Error reversando la transferencia original:', errorReversion);
+    mostrarToast(`No se pudo guardar la corrección: ${errorReversion.message}`, 'error');
+    return false;
+  }
+
+  const { error: errorNueva } = await supabase.from('movimientos_cuenta').insert([
+    {
+      cuenta_id: cuentaDesde,
+      fecha,
+      valor: -monto,
+      concepto: `✎ Corrección: ${concepto} (salida)`,
+      origen_tipo: 'transferencia_interna',
+      created_by: perfil?.id,
+    },
+    {
+      cuenta_id: cuentaHasta,
+      fecha,
+      valor: monto,
+      concepto: `✎ Corrección: ${concepto} (entrada)`,
+      origen_tipo: 'transferencia_interna',
+      created_by: perfil?.id,
+    },
+  ]);
+
+  if (errorNueva) {
+    console.error('Error guardando la transferencia corregida:', errorNueva);
+    mostrarToast(
+      `Se reversó la transferencia original, pero no se pudo guardar la corrección: ${errorNueva.message}. Revisa "Movimientos entre Cuentas" y vuelve a intentar la corrección.`,
+      'error'
+    );
+    await cargarYRenderizar(container);
+    return false;
+  }
+
+  mostrarToast('Transferencia corregida.', 'exito');
+  await cargarYRenderizar(container);
+  return true;
+}
+
 // Cada tarjeta tiene su propio botón de exportar, con su propio archivo --
 // más simple de abrir/revisar que un único libro con todo mezclado.
 async function exportarSaldosExcel() {
@@ -640,10 +865,12 @@ async function exportarTransferenciasExcel() {
     const hoja = XLSX.utils.json_to_sheet(
       transferenciasAgrupadas().map((t) => ({
         Fecha: t.fecha,
+        Hora: horaCorta(t.creadoEn),
         Detalle: t.concepto,
         Desde: t.desde || '',
         Hacia: t.hacia || '',
         Monto: t.monto,
+        Usuario: t.creadoPor,
       }))
     );
 
